@@ -17,6 +17,8 @@ This project is intended to demonstrate production-grade AI Engineering concepts
 - Scalable
 - Enterprise Ready
 - API First
+- AI First
+- Cost Optimized
 - Component Driven
 - Low Coupling
 - High Cohesion
@@ -83,20 +85,35 @@ Inspired by:
 
 The platform should demonstrate:
 
-- Hybrid RAG
-- Multi-Agent Orchestration
-- Prompt Sanitization
-- Prompt Injection Detection
-- Context Summarization
-- Context Compression
-- Semantic Cache
-- LLM Routing
-- Guardrails
-- Memory
+- Enterprise Retrieval Engine
+    - Hierarchical Hybrid RAG
+    - Dense Vector Search
+    - BM25 Keyword Search
+    - Re-ranking
+    - Context Compression
+    - Context Summarization
+    - Citation Generation
+
+- Multi-Agent Orchestration (LangGraph)
+
+- AI Middleware
+    - Prompt Sanitization
+    - Prompt Injection Detection
+    - PII Detection
+    - Guardrails
+    - Semantic Cache
+    - LLM Routing
+    - Output Validation
+
+- Memory Management
+    - Conversation Memory
+    - Context Management
+
 - Tool Calling
+
 - Cost Optimization
-- Evaluation
-- Monitoring
+
+- Evaluation & Monitoring
 
 ---
 
