@@ -1,0 +1,176 @@
+@import "tailwindcss";
+
+/* Enable class-based dark mode (toggled on <html> by the theme store) */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Sidebar is a self-contained dark surface, independent of light/dark mode */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 6px);
+}
+
+:root {
+  --radius: 0.85rem;
+
+  /* Light workspace */
+  --background: hsl(240 25% 98.5%);
+  --foreground: hsl(240 10% 12%);
+
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(240 10% 12%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(240 10% 12%);
+
+  /* Purple/blue enterprise accent */
+  --primary: hsl(255 70% 60%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(240 30% 96%);
+  --secondary-foreground: hsl(240 10% 20%);
+
+  --muted: hsl(240 20% 95%);
+  --muted-foreground: hsl(240 8% 46%);
+  --accent: hsl(255 65% 96%);
+  --accent-foreground: hsl(255 55% 34%);
+
+  --destructive: hsl(0 72% 51%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --success: hsl(152 60% 36%);
+  --success-foreground: hsl(0 0% 100%);
+  --warning: hsl(38 92% 50%);
+  --warning-foreground: hsl(240 10% 12%);
+
+  --border: hsl(240 18% 90%);
+  --input: hsl(240 18% 90%);
+  --ring: hsl(255 70% 60%);
+
+  --chart-1: hsl(255 70% 60%);
+  --chart-2: hsl(217 91% 60%);
+  --chart-3: hsl(199 89% 55%);
+  --chart-4: hsl(280 65% 62%);
+  --chart-5: hsl(231 80% 66%);
+
+  /* Always-dark navigation sidebar */
+  --sidebar: hsl(242 32% 9%);
+  --sidebar-foreground: hsl(240 15% 88%);
+  --sidebar-primary: hsl(255 75% 68%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(242 25% 15%);
+  --sidebar-accent-foreground: hsl(0 0% 100%);
+  --sidebar-border: hsl(242 25% 17%);
+  --sidebar-ring: hsl(255 75% 68%);
+}
+
+.dark {
+  --background: hsl(240 18% 7%);
+  --foreground: hsl(240 10% 92%);
+
+  --card: hsl(240 16% 10%);
+  --card-foreground: hsl(240 10% 92%);
+  --popover: hsl(240 16% 10%);
+  --popover-foreground: hsl(240 10% 92%);
+
+  --primary: hsl(255 75% 68%);
+  --primary-foreground: hsl(240 18% 9%);
+  --secondary: hsl(240 12% 15%);
+  --secondary-foreground: hsl(240 10% 90%);
+
+  --muted: hsl(240 12% 14%);
+  --muted-foreground: hsl(240 8% 65%);
+  --accent: hsl(255 40% 20%);
+  --accent-foreground: hsl(255 70% 85%);
+
+  --destructive: hsl(0 70% 55%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --success: hsl(152 55% 45%);
+  --success-foreground: hsl(0 0% 100%);
+  --warning: hsl(38 92% 55%);
+  --warning-foreground: hsl(240 15% 10%);
+
+  --border: hsl(240 12% 18%);
+  --input: hsl(240 12% 18%);
+  --ring: hsl(255 75% 68%);
+
+  --chart-1: hsl(255 75% 68%);
+  --chart-2: hsl(217 91% 65%);
+  --chart-3: hsl(199 89% 60%);
+  --chart-4: hsl(280 65% 68%);
+  --chart-5: hsl(231 80% 70%);
+
+  /* Sidebar stays the same dark surface in both modes */
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    background: color-mix(in oklab, var(--color-card) 72%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-foreground) 15%, transparent);
+    border-radius: 999px;
+  }
+}
