@@ -22,7 +22,13 @@ Demonstrate the platform by building one fully functional **HR Copilot**. The ar
 - Copilot Composer
 - Knowledge Source Management
 - AI Component Selection
-- Hybrid RAG
+- Enterprise Retrieval Engine 
+    - Hierarchical Hybrid RAG
+    - Hybrid Search (Dense + BM25)
+    - Re-ranking
+    - Context Compression
+    - Context Summarization
+    - Citation Generation
 - LangGraph Agent Orchestration
 - Memory
 - Guardrails
@@ -37,7 +43,7 @@ Demonstrate the platform by building one fully functional **HR Copilot**. The ar
 Frontend: Next.js, React, TypeScript, TailwindCSS, shadcn/ui
 Backend: FastAPI
 Agent Framework: LangGraph
-RAG: LlamaIndex
+Retrieval Engine: LlamaIndex (Hierarchical Hybrid RAG)
 Vector DB: Qdrant
 Database: PostgreSQL
 Cache: Redis
