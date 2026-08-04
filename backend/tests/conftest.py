@@ -1,13 +1,18 @@
 """Shared pytest fixtures."""
 
 import os
+import shutil
+import tempfile
 
 # Must be set before any `app.*` module is imported, since Settings is
 # read (and cached) at first import — this routes the test suite at a
-# dedicated database so it never touches development data.
+# dedicated database and an isolated storage directory so it never
+# touches development data or files.
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/ecs_test"
 )
+_TEST_STORAGE_DIR = tempfile.mkdtemp(prefix="ecs-test-storage-")
+os.environ.setdefault("STORAGE_DIR", _TEST_STORAGE_DIR)
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -33,6 +38,8 @@ async def setup_database():
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+    shutil.rmtree(_TEST_STORAGE_DIR, ignore_errors=True)
 
 
 @pytest_asyncio.fixture

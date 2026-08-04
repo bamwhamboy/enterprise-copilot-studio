@@ -1,8 +1,13 @@
-"""Document endpoints — GET, POST, DELETE only (no update endpoint, per spec)."""
+"""Document endpoints.
+
+GET / POST / DELETE for the Sprint 2 JSON-based CRUD (unchanged), plus
+the new Sprint 3A ``POST /upload`` for real PDF ingestion. No PUT/update
+endpoint, per spec.
+"""
 
 import uuid
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, File, Form, Query, UploadFile, status
 
 from app.core.dependencies import DocumentServiceDep
 from app.schemas.document import DocumentCreate, DocumentRead
@@ -33,10 +38,31 @@ async def get_document(document_id: uuid.UUID, service: DocumentServiceDep) -> D
     "",
     response_model=DocumentRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a document",
+    summary="Create a document (JSON, no file)",
 )
 async def create_document(payload: DocumentCreate, service: DocumentServiceDep) -> DocumentRead:
     document = await service.create_document(payload)
+    return DocumentRead.model_validate(document)
+
+
+@router.post(
+    "/upload",
+    response_model=DocumentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a PDF document",
+)
+async def upload_document(
+    service: DocumentServiceDep,
+    knowledge_source_id: uuid.UUID = Form(...),
+    file: UploadFile = File(...),
+) -> DocumentRead:
+    content = await file.read()
+    document = await service.upload_document(
+        knowledge_source_id=knowledge_source_id,
+        filename=file.filename or "upload.pdf",
+        content_type=file.content_type,
+        content=content,
+    )
     return DocumentRead.model_validate(document)
 
 

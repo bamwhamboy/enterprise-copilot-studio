@@ -14,7 +14,12 @@ from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.core.config import get_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import (
+    DocumentProcessingError,
+    FileTooLargeError,
+    NotFoundError,
+    UnsupportedMediaTypeError,
+)
 from app.core.logging import configure_logging, get_logger
 from app.database.session import dispose_engine
 from app.middleware.request_context import RequestContextMiddleware
@@ -64,6 +69,31 @@ def create_app() -> FastAPI:
     async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(UnsupportedMediaTypeError)
+    async def unsupported_media_type_handler(
+        request: Request, exc: UnsupportedMediaTypeError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(FileTooLargeError)
+    async def file_too_large_handler(request: Request, exc: FileTooLargeError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(DocumentProcessingError)
+    async def document_processing_error_handler(
+        request: Request, exc: DocumentProcessingError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": str(exc)},
         )
 

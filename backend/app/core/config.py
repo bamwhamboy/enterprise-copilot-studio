@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
 
+    # --- Knowledge ingestion (Sprint 3A) -------------------------------------
+    # Base directory (relative to the process working directory, or absolute)
+    # where uploaded documents and their extracted text are stored.
+    STORAGE_DIR: str = "storage/documents"
+    MAX_UPLOAD_SIZE_MB: int = 25
+
 
 @lru_cache
 def get_settings() -> Settings:

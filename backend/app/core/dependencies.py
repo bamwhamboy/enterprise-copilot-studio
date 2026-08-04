@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.database.session import get_db
+from app.knowledge_engine.pipeline.ingestion_pipeline import DocumentIngestionPipeline
+from app.knowledge_engine.storage.document_storage import DocumentStorageService
 from app.services.copilot_service import CopilotService
 from app.services.document_service import DocumentService
 from app.services.knowledge_source_service import KnowledgeSourceService
@@ -38,8 +40,28 @@ async def get_knowledge_source_service(session: DbSessionDep) -> KnowledgeSource
     return KnowledgeSourceService(session)
 
 
-async def get_document_service(session: DbSessionDep) -> DocumentService:
-    return DocumentService(session)
+async def get_document_storage_service(settings: SettingsDep) -> DocumentStorageService:
+    return DocumentStorageService(settings)
+
+
+DocumentStorageServiceDep = Annotated[DocumentStorageService, Depends(get_document_storage_service)]
+
+
+async def get_ingestion_pipeline(
+    settings: SettingsDep, storage: DocumentStorageServiceDep
+) -> DocumentIngestionPipeline:
+    return DocumentIngestionPipeline(settings, storage)
+
+
+IngestionPipelineDep = Annotated[DocumentIngestionPipeline, Depends(get_ingestion_pipeline)]
+
+
+async def get_document_service(
+    session: DbSessionDep,
+    storage: DocumentStorageServiceDep,
+    pipeline: IngestionPipelineDep,
+) -> DocumentService:
+    return DocumentService(session, storage=storage, pipeline=pipeline)
 
 
 CopilotServiceDep = Annotated[CopilotService, Depends(get_copilot_service)]
