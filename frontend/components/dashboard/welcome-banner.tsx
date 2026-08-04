@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useSyncExternalStore } from "react";
 import { motion } from "framer-motion";
 import {
@@ -21,10 +22,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const quickActions: QuickAction[] = [
-  { id: "new-copilot", label: "Create Copilot", icon: Plus },
-  { id: "add-source", label: "Add Knowledge Source", icon: Database },
-  { id: "invite", label: "Invite Teammate", icon: UserPlus },
-  { id: "docs", label: "View Documentation", icon: BookOpen },
+  { id: "new-copilot", label: "Create Copilot", icon: Plus, href: "/create-copilot" },
+  { id: "add-source", label: "Add Knowledge Source", icon: Database, href: "/knowledge-sources" },
+  { id: "invite", label: "Invite Teammate", icon: UserPlus, href: "/settings" },
+  { id: "docs", label: "View Documentation", icon: BookOpen, href: "/help" },
 ];
 
 function getGreeting(hour: number) {
@@ -80,9 +81,11 @@ export function WelcomeBanner() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             {quickActions.map((action) => (
-              <DropdownMenuItem key={action.id}>
-                <action.icon />
-                {action.label}
+              <DropdownMenuItem key={action.id} asChild>
+                <Link href={action.href}>
+                  <action.icon />
+                  {action.label}
+                </Link>
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   Bot,
   Zap,
@@ -128,6 +129,8 @@ const marketplaceCopilots: MarketplaceCopilotData[] = [
     category: "Human Resources",
     icon: Users,
     status: "available",
+    // No dedicated HR Copilot page exists yet — route into the wizard that creates/configures it.
+    href: "/create-copilot",
   },
   {
     id: "finance-copilot",
@@ -136,6 +139,7 @@ const marketplaceCopilots: MarketplaceCopilotData[] = [
     category: "Finance",
     icon: Landmark,
     status: "coming-soon",
+    href: "/marketplace",
   },
   {
     id: "procurement-copilot",
@@ -144,6 +148,7 @@ const marketplaceCopilots: MarketplaceCopilotData[] = [
     category: "Procurement",
     icon: Building2,
     status: "coming-soon",
+    href: "/marketplace",
   },
   {
     id: "it-copilot",
@@ -152,6 +157,7 @@ const marketplaceCopilots: MarketplaceCopilotData[] = [
     category: "IT",
     icon: Laptop,
     status: "coming-soon",
+    href: "/marketplace",
   },
 ];
 
@@ -254,9 +260,11 @@ export default function DashboardPage() {
             title="Copilot Marketplace"
             description="Ready-made templates for every business function."
             action={
-              <Button variant="ghost" size="sm">
-                Browse all
-                <ArrowUpRight className="size-3.5" />
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/marketplace">
+                  Browse all
+                  <ArrowUpRight className="size-3.5" />
+                </Link>
               </Button>
             }
           >

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { LogOut, Settings, UserRound } from "lucide-react";
 
 import type { AppUser } from "@/types/user";
@@ -51,18 +52,24 @@ export function UserMenu() {
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>
-          <UserRound />
-          Profile
+        <DropdownMenuItem asChild>
+          <Link href="/settings">
+            <UserRound />
+            Profile
+          </Link>
         </DropdownMenuItem>
-        <DropdownMenuItem>
-          <Settings />
-          Settings
+        <DropdownMenuItem asChild>
+          <Link href="/settings">
+            <Settings />
+            Settings
+          </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive">
-          <LogOut />
-          Sign out
+        <DropdownMenuItem asChild variant="destructive">
+          <Link href="/">
+            <LogOut />
+            Sign out
+          </Link>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -37,6 +37,7 @@ export interface MarketplaceCopilotData {
   icon: LucideIcon;
   status: MarketplaceCopilotStatus;
   category: string;
+  href: string;
 }
 
 export interface OptimizerMetricData {
@@ -61,4 +62,5 @@ export interface QuickAction {
   id: string;
   label: string;
   icon: LucideIcon;
+  href: string;
 }

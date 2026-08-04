@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ArrowRight, Bell } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -46,22 +47,24 @@ export function MarketplaceCopilotCard({
         </div>
 
         <Button
+          asChild
           variant={isAvailable ? "default" : "outline"}
           size="sm"
           className="w-full"
-          disabled={!isAvailable}
         >
-          {isAvailable ? (
-            <>
-              Launch Copilot
-              <ArrowRight className="size-3.5" />
-            </>
-          ) : (
-            <>
-              Notify Me
-              <Bell className="size-3.5" />
-            </>
-          )}
+          <Link href={data.href}>
+            {isAvailable ? (
+              <>
+                Launch Copilot
+                <ArrowRight className="size-3.5" />
+              </>
+            ) : (
+              <>
+                Notify Me
+                <Bell className="size-3.5" />
+              </>
+            )}
+          </Link>
         </Button>
       </CardContent>
     </Card>
