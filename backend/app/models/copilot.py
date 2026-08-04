@@ -1,0 +1,64 @@
+"""Copilot ORM model.
+
+A Copilot is composed from zero or more KnowledgeSources (many-to-many —
+a single knowledge source, e.g. a shared SharePoint site, can back more
+than one copilot).
+"""
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import DateTime, ForeignKey, String, Table, Column
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database.base import Base
+
+# Association table for the Copilot <-> KnowledgeSource many-to-many relationship.
+copilot_knowledge_sources = Table(
+    "copilot_knowledge_sources",
+    Base.metadata,
+    Column(
+        "copilot_id",
+        UUID(as_uuid=True),
+        ForeignKey("copilots.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "knowledge_source_id",
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_sources.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+class Copilot(Base):
+    """An enterprise AI copilot (e.g. "HR Copilot")."""
+
+    __tablename__ = "copilots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    domain: Mapped[str] = mapped_column(String(100), nullable=False, default="hr")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
+    model: Mapped[str] = mapped_column(String(100), nullable=False, default="groq-llama-3")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    knowledge_sources: Mapped[list["KnowledgeSource"]] = relationship(
+        "KnowledgeSource",
+        secondary=copilot_knowledge_sources,
+        back_populates="copilots",
+    )

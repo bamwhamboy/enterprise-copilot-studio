@@ -1,8 +1,12 @@
 # Enterprise Copilot Studio — Backend
 
-Foundation-phase FastAPI backend for Enterprise Copilot Studio. This phase
-establishes a clean, modular, production-ready service skeleton — **no AI
-functionality is implemented yet**. The only route is `GET /health`.
+FastAPI backend for Enterprise Copilot Studio.
+
+- **Sprint 1 (foundation)**: app skeleton, configuration, logging, `GET /health`.
+- **Sprint 2 (this update)**: persistence layer — PostgreSQL, SQLAlchemy,
+  the repository pattern, and CRUD APIs for **Copilot**, **KnowledgeSource**,
+  and **Document**. Still **no AI functionality** — no RAG, no Qdrant, no
+  LangGraph, no LiteLLM, no embeddings, no chat APIs, no auth, no Redis logic.
 
 ## Tech Stack
 
@@ -16,63 +20,96 @@ functionality is implemented yet**. The only route is `GET /health`.
 | Containerization| Docker / Docker Compose          |
 | Testing         | pytest, pytest-asyncio, httpx    |
 
-Redis, Qdrant, LiteLLM, LangGraph, and LlamaIndex are part of the
-platform's intended stack and are **provisioned in `docker-compose.yml`**
-and **configured in `.env.example`**, but no application code connects to
-or calls them yet — that arrives in the AI-services phase.
+Redis, Qdrant, LiteLLM, LangGraph, and LlamaIndex remain provisioned in
+`docker-compose.yml` / `.env.example` but unused in code — that's a later
+phase.
+
+## Data Model (Sprint 2)
+
+```
+Copilot ──< copilot_knowledge_sources >── KnowledgeSource ──< Document
+        (many-to-many)                                    (one-to-many)
+```
+
+- **Copilot**: `name`, `description`, `domain`, `status`, `model`, plus a
+  many-to-many link to `KnowledgeSource` (a source can back more than one
+  copilot).
+- **KnowledgeSource**: `name`, `source_type` (documents/database/website/
+  connector), `status`.
+- **Document**: belongs to exactly one `KnowledgeSource`
+  (`ON DELETE CASCADE` — deleting a source deletes its documents),
+  `name`, `status`, `pages`, `chunks`, `embeddings`.
 
 ## Folder Structure
 
 ```
 backend/
 ├── app/
-│   ├── main.py                # FastAPI app factory + entrypoint
+│   ├── main.py                     # App factory + 404 exception handler
 │   ├── api/
-│   │   ├── router.py           # Aggregates all sub-routers
+│   │   ├── router.py                # Aggregates health (unversioned) + v1 (business) routers
 │   │   └── v1/
-│   │       └── health.py       # GET /health — the only route in this phase
+│   │       ├── health.py            # GET /health
+│   │       ├── copilots.py          # Copilot CRUD
+│   │       ├── knowledge_sources.py # KnowledgeSource CRUD
+│   │       └── documents.py         # Document GET/POST/DELETE
 │   ├── core/
-│   │   ├── config.py           # Pydantic v2 Settings (single source of truth)
-│   │   ├── logging.py          # Structured logging setup
-│   │   └── dependencies.py     # Shared DI providers
-│   ├── middleware/
-│   │   └── request_context.py  # Request ID + request/response logging
-│   ├── database/
-│   │   ├── base.py             # SQLAlchemy declarative base
-│   │   └── session.py          # Async engine, session factory, get_db()
-│   ├── schemas/
-│   │   └── health.py           # Pydantic response models
-│   ├── planner/                # (placeholder) LangGraph agent orchestration
-│   ├── knowledge_engine/       # (placeholder) Hierarchical Hybrid RAG
-│   ├── memory/                 # (placeholder) conversation/context memory
-│   ├── tool_calling/           # (placeholder) structured tool invocation
-│   ├── llm/                    # (placeholder) LiteLLM gateway + routing
-│   ├── guardrails/             # (placeholder) prompt sanitization, PII, policy
-│   ├── models/                 # (placeholder) SQLAlchemy ORM models
-│   ├── services/               # (placeholder) business logic layer
-│   └── utils/                  # (placeholder) shared helpers
-├── alembic/                    # Migration environment (wired to app Settings + Base)
+│   │   ├── config.py                # Settings (unchanged from Sprint 1)
+│   │   ├── logging.py
+│   │   ├── dependencies.py          # + service-layer DI providers (new)
+│   │   └── exceptions.py            # NotFoundError (new)
+│   ├── models/                      # SQLAlchemy ORM models (new)
+│   │   ├── copilot.py
+│   │   ├── knowledge_source.py
+│   │   └── document.py
+│   ├── schemas/                     # Pydantic request/response schemas (new)
+│   │   ├── common.py
+│   │   ├── copilot.py
+│   │   ├── knowledge_source.py
+│   │   └── document.py
+│   ├── repositories/                # Repository pattern (new package)
+│   │   ├── base.py                  # Generic async CRUD repository
+│   │   ├── copilot_repository.py
+│   │   ├── knowledge_source_repository.py
+│   │   └── document_repository.py
+│   ├── services/                    # Business logic layer (new)
+│   │   ├── copilot_service.py
+│   │   ├── knowledge_source_service.py
+│   │   └── document_service.py
+│   ├── database/                    # Unchanged from Sprint 1
+│   ├── middleware/                  # Unchanged from Sprint 1
+│   └── planner/ knowledge_engine/ memory/ tool_calling/ llm/
+│       guardrails/ utils/           # Still empty placeholders
+├── alembic/
+│   └── versions/
+│       └── ..._add_copilot_knowledge_source_document_.py   # New migration
 ├── tests/
-│   ├── conftest.py             # Async test client fixture
-│   └── test_health.py          # Tests for GET /health
-├── Dockerfile                  # Multi-stage, non-root runtime image
-├── docker-compose.yml          # api + postgres + redis + qdrant
-├── requirements.txt
-├── .env.example
-├── alembic.ini
-└── pytest.ini
+│   ├── conftest.py                  # + dedicated test DB, schema setup (updated)
+│   ├── test_health.py               # Unchanged from Sprint 1
+│   ├── test_copilots.py             # New — 10 tests
+│   ├── test_knowledge_sources.py    # New — 8 tests
+│   └── test_documents.py            # New — 6 tests
 ```
 
-The nine placeholder packages (`planner/`, `knowledge_engine/`, `memory/`,
-`tool_calling/`, `llm/`, `guardrails/`, `models/`, `services/`, `utils/`)
-contain only a docstring each. They exist so later phases add code to an
-already-agreed module boundary instead of restructuring the app.
+## CRUD Endpoints
+
+All mounted under `/api/v1` (health stays unversioned at `/health`):
+
+| Entity | Endpoints |
+|---|---|
+| Copilots | `GET /api/v1/copilots`, `GET /{id}`, `POST`, `PUT /{id}`, `DELETE /{id}` |
+| Knowledge Sources | `GET /api/v1/knowledge-sources`, `GET /{id}`, `POST`, `PUT /{id}`, `DELETE /{id}` |
+| Documents | `GET /api/v1/documents` (optional `?knowledge_source_id=`), `GET /{id}`, `POST`, `DELETE /{id}` |
+
+Notes:
+- Creating a Copilot accepts `knowledge_source_ids: [...]` to attach existing sources.
+- Updating a Copilot with `knowledge_source_ids` **replaces** its full set of linked sources.
+- Creating a Document validates the parent `knowledge_source_id` exists (404 if not) rather than surfacing a raw FK error.
+- Not-found entities return a clean `404 {"detail": "..."}` via a registered `NotFoundError` handler, not a raw 500.
 
 ## How to Run
 
 ### Option A — Docker Compose (recommended)
-
-Brings up the API alongside Postgres, Redis, and Qdrant:
 
 ```bash
 cd backend
@@ -80,17 +117,13 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The API will be available at `http://localhost:8000`, with hot-reload
-enabled (the local directory is volume-mounted into the container).
+On first run, apply migrations inside the running container:
 
-- Health check: `http://localhost:8000/health`
-- Interactive docs: `http://localhost:8000/docs`
+```bash
+docker compose exec api alembic upgrade head
+```
 
 ### Option B — Local virtualenv
-
-Requires a locally running PostgreSQL instance if you want the database
-session to actually connect (not required for `/health`, which has no
-database dependency).
 
 ```bash
 cd backend
@@ -99,43 +132,62 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# Edit .env if your local Postgres isn't on the default host/port.
+# Point DATABASE_URL at your local PostgreSQL if it's not on the default host/port.
 
+alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-## How to Test
+## How to Test Every Endpoint Using Swagger
 
-```bash
-cd backend
-source .venv/bin/activate   # if not already active
-pytest -v
-```
+1. Start the API (either option above) and open **`http://localhost:8000/docs`**.
+2. Expand **Knowledge Sources → POST /api/v1/knowledge-sources**, click
+   *Try it out*, and create one, e.g.:
+   ```json
+   { "name": "HR Policies", "source_type": "documents", "status": "active" }
+   ```
+   Copy the `id` from the response.
+3. Expand **Documents → POST /api/v1/documents**, *Try it out*, and create a
+   document using that `knowledge_source_id`:
+   ```json
+   { "knowledge_source_id": "<paste id>", "name": "Employee Handbook.pdf", "status": "indexed", "pages": 28, "chunks": 182, "embeddings": 182 }
+   ```
+4. Expand **Copilots → POST /api/v1/copilots**, *Try it out*, and create a
+   copilot referencing the same knowledge source:
+   ```json
+   { "name": "HR Copilot", "domain": "hr", "knowledge_source_ids": ["<paste id>"] }
+   ```
+   The response embeds the linked knowledge source.
+5. Try **GET /api/v1/copilots** and **GET /api/v1/copilots/{copilot_id}** to
+   confirm the copilot (and its relationship) round-trips correctly.
+6. Try **PUT /api/v1/copilots/{copilot_id}** with `{"status": "active"}` to
+   confirm partial updates work and unrelated fields are preserved.
+7. Try **DELETE /api/v1/knowledge-sources/{knowledge_source_id}** on the
+   source you created, then **GET /api/v1/documents/{document_id}** — it
+   should now 404, confirming the cascade delete.
+8. Try any `GET .../{id}` with a random UUID (e.g.
+   `00000000-0000-0000-0000-000000000000`) — confirms the clean 404 handler.
 
-Tests run against the app in-process via `httpx.ASGITransport` — no
-running server, database, Redis, or Qdrant instance is required. This
-was verified in a real virtualenv during development: dependencies
-install cleanly, the app boots, and all tests pass.
+Every step above was run for real against a live PostgreSQL instance while
+building this, along with the automated test suite (`pytest -v`, 27 tests,
+including 8 SQLAlchemy-relationship/cascade-specific cases) — not just
+written and assumed to work.
 
 ## Database Migrations (Alembic)
 
-No models exist yet, so there's nothing to migrate. Once models are
-added under `app/models/` (inheriting from `app.database.base.Base`),
-generate a migration with:
+`alembic/env.py` imports `app.models` so `Base.metadata` is fully
+populated, and reads the DB URL from `app.core.config.get_settings()` —
+no separate configuration needed.
 
 ```bash
-alembic revision --autogenerate -m "add <table>"
+alembic revision --autogenerate -m "description"
 alembic upgrade head
 ```
 
-`alembic/env.py` is already wired to `app.core.config.get_settings()` and
-`app.database.base.Base.metadata`, so this will work without further
-configuration once real models exist.
-
 ## What's Intentionally Not Here
 
-Per this phase's scope, the following are **not implemented**: RAG,
-Qdrant queries, Redis caching, LangGraph agents, LiteLLM calls,
-embeddings, any LLM calls, document parsing, or any API route beyond
-`GET /health`. These land in the next phase, building on the module
-boundaries already established here.
+Still not implemented, per scope: RAG, Qdrant queries, Redis caching,
+LangGraph agents, LiteLLM calls, embeddings generation, chat APIs, and
+authentication. These land in a future sprint, building on the
+repository/service pattern established here.
+

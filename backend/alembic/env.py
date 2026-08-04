@@ -16,9 +16,10 @@ from alembic import context
 from app.core.config import get_settings
 from app.database.base import Base
 
-# Import model modules here as they're added, so Base.metadata is populated
-# for autogenerate, e.g.:
-# from app.models import copilot  # noqa: F401
+# Import all model modules so Base.metadata is fully populated before
+# autogenerate compares it against the live database. Add new model
+# modules to app/models/__init__.py and they'll be picked up here too.
+import app.models  # noqa: F401
 
 config = context.config
 
