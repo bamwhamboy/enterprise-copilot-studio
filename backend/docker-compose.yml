@@ -1,0 +1,82 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ecs-api
+    env_file:
+      - .env
+    environment:
+      # Override host-local URLs with in-network service names.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ecs
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - ecs-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecs-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ecs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ecs-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ecs-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ecs-network
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ecs-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - ecs-network
+
+networks:
+  ecs-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  qdrant-data:
