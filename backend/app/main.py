@@ -22,6 +22,7 @@ from app.core.exceptions import (
 )
 from app.core.logging import configure_logging, get_logger
 from app.database.session import dispose_engine
+from app.guardrails.guardrails_runtime import GuardrailViolationError
 from app.knowledge_engine.indexing.indexing_service import DocumentNotReadyError
 from app.middleware.request_context import RequestContextMiddleware
 
@@ -105,6 +106,19 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(GuardrailViolationError)
+    async def guardrail_violation_handler(
+        request: Request, exc: GuardrailViolationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "stage": exc.stage,
+                "issues": [issue.message for issue in exc.result.issues],
+            },
         )
 
     app.include_router(api_router)

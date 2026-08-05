@@ -13,12 +13,19 @@ FastAPI backend for Enterprise Copilot Studio.
   Copilot implementations sit on — an LLM Gateway with a real
   provider-routing layer, a Planner interface, a Guardrails validation
   framework, a Prompt Engine, and Correlation ID propagation.
-- **Sprint 3B (this update)**: the **Enterprise Retrieval Engine** —
+- **Sprint 3B (retrieval)**: the **Enterprise Retrieval Engine** —
   hierarchical chunking, embeddings, indexing into Qdrant, and hybrid
   (semantic + BM25) retrieval with citation-preserving context
-  compression. Still no chat, no LiteLLM calls, no LangGraph execution,
-  no agents, no HR Copilot, no prompt engineering wired to an LLM, no
-  tool calling.
+  compression.
+- **Sprint 5 (this update)**: the **Enterprise AI Runtime** — a working
+  conversational engine. LangGraph orchestrates a 5-node workflow
+  (planner → retrieval → context builder → response generator →
+  citation builder); the LLM Gateway is completed with real LiteLLM
+  calls across 5 providers; conversation memory, a guardrails runtime
+  (injection/jailbreak/PII detection + masking), a tool-calling
+  framework, and RAG improvements (query rewriting, re-ranking,
+  confidence scoring) are all wired together behind
+  `POST /api/v1/chat` and `POST /api/v1/chat/stream` (SSE).
 
 ## Tech Stack
 
@@ -347,6 +354,171 @@ Qdrant with `MockEmbedding` — see `tests/conftest.py`'s
 huggingface.co, remove those overrides to test against the real
 embedding model.
 
+## Enterprise AI Runtime (Sprint 5)
+
+The chat runtime: LangGraph orchestration, a completed (LiteLLM-backed)
+LLM Gateway, conversation memory, a guardrails runtime, tool calling,
+and RAG improvements — all tied together by the Chat Orchestrator
+behind `POST /api/v1/chat`.
+
+```
+app/
+├── agents/                       # LangGraph workflow nodes
+│   ├── state.py                    # ChatState (shared across the graph)
+│   ├── planner_node.py             # + SimpleChatPlanner, first concrete Planner impl
+│   ├── retrieval_node.py           # query rewrite -> hybrid retrieval -> rerank -> confidence
+│   ├── context_builder_node.py     # assembles system + context + history + user messages
+│   ├── response_generator_node.py  # calls LLM Gateway, enforces output guardrails
+│   └── citation_builder_node.py    # extracts citations from retrieved chunks
+├── workflows/
+│   └── chat_workflow.py          # compiles the 5 nodes into a LangGraph StateGraph
+├── memory/
+│   └── conversation_memory_service.py  # session get-or-create (isolated by user+copilot),
+│                                          windowed history load, message append
+├── models/
+│   └── conversation.py           # ConversationSession, ConversationMessage (Postgres)
+├── tool_calling/
+│   ├── base.py                     # Tool interface + ToolResult
+│   ├── registry.py                 # ToolRegistry
+│   └── tools/knowledge_search_tool.py  # wraps HybridRetriever as a callable tool
+├── guardrails/
+│   ├── pii_detector.py             # RegexPIIDetector: detect() + mask()
+│   ├── injection_detector.py       # RegexPromptInjectionDetector (injection + jailbreak)
+│   ├── harmful_content_detector.py # HarmfulContentValidator (OutputValidator impl)
+│   └── guardrails_runtime.py       # GuardrailsRuntime — the two enforcement checkpoints
+├── knowledge_engine/retrieval/     # additive to Sprint 3B, HybridRetriever untouched
+│   ├── query_rewriter.py           # rule-based (default) + optional LLM-based rewrite
+│   ├── reranker.py                 # lexical-overlap blend over the RRF score
+│   └── confidence_scorer.py        # 0-1 confidence from top-score + score-gap
+├── llm/
+│   └── providers.py               # REWRITTEN IN PLACE: generate()/stream() now call
+│                                     # litellm.acompletion for real (5 providers incl. Ollama)
+├── services/
+│   └── chat_orchestrator.py       # ChatOrchestratorService — the single chat entry point
+├── schemas/chat.py, conversation.py
+├── repositories/conversation_repository.py
+└── api/v1/chat.py                 # POST /chat, POST /chat/stream (SSE)
+```
+
+### Architecture: how a chat turn flows
+
+1. **Guardrails (input)** — `GuardrailsRuntime.enforce_input()`: blocked-term list, prompt
+   injection/jailbreak patterns (regex-based), PII flagged as a warning (not blocking).
+2. **Chat Orchestrator** resolves the copilot, gets-or-creates the conversation session
+   (isolated by `user_id` + `copilot_id`), loads windowed history.
+3. **LangGraph workflow** runs: `planner` → `retrieval` (query rewrite, hybrid search,
+   re-rank, confidence score) → `context_builder` (Prompt Engine renders system + context +
+   history + user message) → `response_generator` (LLM Gateway → LiteLLM) →
+   `citation_builder`.
+4. **Guardrails (output)** — `GuardrailsRuntime.enforce_output()`: harmful-content check,
+   then PII masking on the response text.
+5. Both turns (user + assistant) are persisted to `ConversationMessage`; the response
+   (message, citations, confidence) goes back to the caller.
+
+Streaming (`/chat/stream`) runs steps 1–3's non-LLM parts synchronously, then streams the
+LLM response token-by-token via SSE. **Known tradeoff**: output guardrail validation/PII
+masking need the complete text (a masked span could straddle a chunk boundary), so they run
+once on the full accumulated response in the final `done` event — raw deltas stream
+unmasked. The frontend should treat the `done` event's `message` field as authoritative.
+
+### LiteLLM: provider-agnostic by design
+
+`to_litellm_model(provider, model)` is the *only* place that knows a provider's LiteLLM
+prefix (`groq/`, `azure/`, `anthropic/`, `ollama/`, none for OpenAI). Switching providers or
+models is a `DEFAULT_LLM_PROVIDER`/`DEFAULT_LLM_MODEL` config change — no code changes
+anywhere else. Verified via 15 tests in `test_llm_gateway.py`, including a real network call
+to Ollama (no API key needed) confirming the integration reaches LiteLLM's actual HTTP layer.
+
+### Extensibility points (built in, not bolted on)
+
+- **Guardrails**: `PromptInjectionDetector`/`PIIDetector`/`OutputValidator` are Sprint 4
+  interfaces; Sprint 5's regex-based implementations can be swapped for NVIDIA NeMo
+  Guardrails (or any ML-based detector) by implementing the same interfaces and passing them
+  into `GuardrailsRuntime`'s constructor — zero changes to the runtime or `ChatOrchestratorService`.
+- **Planner**: `SimpleChatPlanner` is the first concrete `Planner` (Sprint 4 interface). A
+  smarter planner (e.g. one that chooses between retrieval, tool calls, or a direct answer)
+  implements the same `plan()`/`execute()` contract.
+- **Tools**: adding SQL/REST/calculator/web-search tools means implementing `Tool` and
+  registering it in `get_tool_registry()` — the registry, LangGraph, and orchestrator need
+  no changes.
+- **Memory**: `ConversationMemoryService`'s public methods are the long-term-memory seam —
+  a future summarization/vector-indexed-history method can sit alongside `load_history()`
+  without changing its signature or any caller.
+
+### How to Test
+
+**1. Start the stack** (Docker, per the constraints of this sprint — unchanged):
+```bash
+cd backend
+docker compose up --build
+docker compose exec api alembic upgrade head
+```
+
+**2. Swagger sequence** at `http://localhost:8000/docs`:
+1. `POST /api/v1/knowledge-sources` — create one (e.g. `{"name": "HR Policies"}`)
+2. `POST /api/v1/documents/upload` — upload a real PDF with that `knowledge_source_id`
+3. `POST /api/v1/index/{document_id}` — index it
+4. `POST /api/v1/copilots` — create a copilot with `knowledge_source_ids: [<id from step 1>]`
+5. `POST /api/v1/chat` — chat against it (sample request below)
+6. `POST /api/v1/chat/stream` — same payload, watch the SSE stream in the response body
+
+**3. Sample chat request:**
+```json
+POST /api/v1/chat
+{
+  "copilot_id": "11c99cbb-e7ae-423d-835b-9d43e19e8370",
+  "user_id": "vijay",
+  "message": "How many annual leave days do I get?"
+}
+```
+
+**Expected response:**
+```json
+{
+  "session_id": "3243f61c-0d72-4a60-ab82-a76c47cac79f",
+  "message": "You get 20 days of paid annual leave per year.",
+  "citations": [
+    {
+      "document_name": "leave_policy.pdf",
+      "knowledge_source_id": "11c99cbb-e7ae-423d-835b-9d43e19e8370",
+      "page_number": null,
+      "section": null,
+      "chunk_number": 0,
+      "score": 0.0328
+    }
+  ],
+  "confidence": 0.81
+}
+```
+Send a follow-up with the returned `session_id` to continue the same conversation.
+
+**4. Validation checklist** (all covered by `pytest`, `tests/test_chat.py` +
+`tests/test_llm_gateway.py` + `tests/test_guardrails_runtime.py` + `tests/test_memory.py`):
+- **LangGraph**: `test_chat_returns_grounded_response_with_citations` exercises the full
+  5-node graph.
+- **LiteLLM**: `test_gateway_generate_routes_to_default_provider` (monkeypatched) +
+  `test_ollama_reaches_real_litellm_network_layer` (real network layer, no mock).
+- **Memory**: `test_session_isolation_by_user_and_copilot`,
+  `test_history_is_windowed_to_max_messages`.
+- **Guardrails**: `test_chat_rejects_prompt_injection_with_400`,
+  `test_chat_masks_pii_in_response`.
+- **Streaming**: `test_chat_stream_yields_sse_events` — parses real SSE frames.
+- **End-to-end**: `test_chat_session_persists_and_reuses_history` — two turns, same session.
+
+```bash
+cd backend
+pip install -r requirements.txt
+pytest tests/test_chat.py tests/test_llm_gateway.py tests/test_guardrails_runtime.py \
+       tests/test_memory.py tests/test_tool_calling.py tests/test_rag_improvements.py -v
+```
+
+**Honest limitation**: no real LLM provider API key is available in this development
+environment, so every test above monkeypatches `litellm.acompletion` to verify routing,
+prompt assembly, guardrail enforcement, and response shaping — the same technique used for
+`MockEmbedding` in Sprint 3B. To test against a real provider, set `GROQ_API_KEY` (or any
+other provider's key) in `.env` and the exact same code path runs for real, no changes
+needed.
+
 ## How to Run
 
 ### Option A — Docker Compose (recommended)
@@ -503,13 +675,25 @@ the standard library (`abc`, `contextvars`, `enum`) already in the project.
 | `llama-index-retrievers-bm25` | BM25 sparse retrieval |
 | `qdrant-client` | Vector database client (pinned to 1.18.0 — see version note in `requirements.txt`) |
 
+**Sprint 5:**
+
+| Package | Why |
+|---|---|
+| `langgraph` | Orchestration engine for the 5-node chat workflow |
+| `litellm` | Unified call interface across OpenAI/Azure OpenAI/Anthropic/Groq/Ollama |
+
+Also bumped in Sprint 5 (necessary, not optional — see `requirements.txt` comments):
+`transformers` 4.44.2→4.48.3 and `tokenizers` 0.19.1→0.21.4, because `litellm` requires
+`tokenizers>=0.21.0`, which the Sprint 3B pin couldn't satisfy. Re-verified the torch/numpy
+ABI fix from Sprint 3B still holds with the new versions before shipping (full 65-test
+regression suite, clean, before any Sprint 5 code was written).
+
 ## What's Intentionally Not Here
 
-Still not implemented, per scope: chat APIs, LiteLLM calls, LangGraph
-execution, agents, an HR Copilot, prompt engineering wired to an actual
-LLM call, and tool calling. Sprint 3B built real retrieval
-infrastructure (chunking, embeddings, indexing, hybrid search,
-compression, citations) that a future chat/copilot sprint will consume
-via `GET /api/v1/search` — no code in this repository makes an LLM API
-call.
-
+Per Sprint 5's explicit scope: the Sprint 3B retrieval implementation was not replaced (only
+extended with query rewriting/re-ranking/confidence scoring as additive post-processing
+steps). No authentication beyond the existing `user_id` string field — real auth/session
+tokens are future work the design deliberately doesn't need major refactoring to add. No
+real LLM provider was called end-to-end in this environment (no API key available) — every
+integration test monkeypatches `litellm.acompletion`; see the Enterprise AI Runtime section
+above for what that does and doesn't prove.

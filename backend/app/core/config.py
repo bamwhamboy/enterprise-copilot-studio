@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_KEY: str | None = None
     AZURE_OPENAI_ENDPOINT: str | None = None
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
+    OLLAMA_BASE_URL: str | None = "http://localhost:11434"
 
     # --- Knowledge ingestion (Sprint 3A) -------------------------------------
     # Base directory (relative to the process working directory, or absolute)
@@ -104,6 +105,14 @@ class Settings(BaseSettings):
     HYBRID_FINAL_TOP_K: int = 5
     CONTEXT_COMPRESSION_MAX_CHUNKS: int = 5
     CONTEXT_COMPRESSION_MAX_CHARS_PER_CHUNK: int = 1200
+
+    # --- Enterprise AI Runtime (Sprint 5) ------------------------------------
+    MAX_CONVERSATION_HISTORY_MESSAGES: int = 20
+    GUARDRAILS_INPUT_ENABLED: bool = True
+    GUARDRAILS_OUTPUT_ENABLED: bool = True
+    GUARDRAILS_PII_MASKING_ENABLED: bool = True
+    RAG_QUERY_REWRITE_ENABLED: bool = True
+    RAG_RERANK_ENABLED: bool = True
 
 
 @lru_cache

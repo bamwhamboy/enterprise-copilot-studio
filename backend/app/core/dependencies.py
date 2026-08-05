@@ -17,6 +17,10 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 
 from app.core.config import Settings, get_settings
 from app.database.session import get_db
+from app.guardrails.guardrails_runtime import GuardrailsRuntime
+from app.guardrails.harmful_content_detector import HarmfulContentValidator
+from app.guardrails.injection_detector import RegexPromptInjectionDetector
+from app.guardrails.pii_detector import RegexPIIDetector
 from app.guardrails.prompt_sanitizer import PromptSanitizer
 from app.knowledge_engine.chunking.hierarchical_chunker import HierarchicalChunker
 from app.knowledge_engine.compression.compression_service import ContextCompressionService
@@ -28,10 +32,16 @@ from app.knowledge_engine.retrieval.hybrid_retriever import HybridRetriever
 from app.knowledge_engine.storage.document_storage import DocumentStorageService
 from app.llm.gateway import LLMGateway
 from app.llm.providers import build_provider_clients
+from app.memory.conversation_memory_service import ConversationMemoryService
 from app.prompt_engine.renderer import PromptRenderer
+from app.repositories.copilot_repository import CopilotRepository
+from app.services.chat_orchestrator import ChatOrchestratorService
 from app.services.copilot_service import CopilotService
 from app.services.document_service import DocumentService
 from app.services.knowledge_source_service import KnowledgeSourceService
+from app.tool_calling.registry import ToolRegistry
+from app.tool_calling.tools.knowledge_search_tool import KnowledgeSearchTool
+from app.workflows.chat_workflow import build_chat_workflow
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -98,13 +108,13 @@ LLMGatewayDep = Annotated[LLMGateway, Depends(get_llm_gateway)]
 
 
 async def get_prompt_sanitizer() -> PromptSanitizer:
-    """Build a ``PromptSanitizer`` with the default blocked-term list.
-
-    Injection/PII detectors aren't passed in yet — no concrete
-    implementations exist until a later sprint (see
-    ``app.guardrails.prompt_sanitizer``).
+    """Build a ``PromptSanitizer`` with the default blocked-term list plus
+    the concrete injection and PII detectors implemented in Sprint 5.
     """
-    return PromptSanitizer()
+    return PromptSanitizer(
+        injection_detector=RegexPromptInjectionDetector(),
+        pii_detector=RegexPIIDetector(),
+    )
 
 
 PromptSanitizerDep = Annotated[PromptSanitizer, Depends(get_prompt_sanitizer)]
@@ -191,3 +201,82 @@ async def get_compression_service(settings: SettingsDep) -> ContextCompressionSe
 
 
 CompressionServiceDep = Annotated[ContextCompressionService, Depends(get_compression_service)]
+
+
+# --- Sprint 5: Enterprise AI Runtime DI providers ---------------------------
+
+
+async def get_conversation_memory_service(
+    session: DbSessionDep, settings: SettingsDep
+) -> ConversationMemoryService:
+    return ConversationMemoryService(session, settings)
+
+
+ConversationMemoryServiceDep = Annotated[
+    ConversationMemoryService, Depends(get_conversation_memory_service)
+]
+
+
+async def get_guardrails_runtime(
+    settings: SettingsDep, sanitizer: PromptSanitizerDep
+) -> GuardrailsRuntime:
+    return GuardrailsRuntime(
+        settings,
+        input_validator=sanitizer,
+        output_validator=HarmfulContentValidator(),
+        pii_detector=RegexPIIDetector(),
+    )
+
+
+GuardrailsRuntimeDep = Annotated[GuardrailsRuntime, Depends(get_guardrails_runtime)]
+
+
+async def get_tool_registry(
+    retriever: HybridRetrieverDep, compression: CompressionServiceDep
+) -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(KnowledgeSearchTool(retriever, compression))
+    return registry
+
+
+ToolRegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
+
+
+async def get_copilot_repository(session: DbSessionDep) -> CopilotRepository:
+    return CopilotRepository(session)
+
+
+CopilotRepositoryDep = Annotated[CopilotRepository, Depends(get_copilot_repository)]
+
+
+async def get_chat_workflow(
+    settings: SettingsDep,
+    retriever: HybridRetrieverDep,
+    compression: CompressionServiceDep,
+    renderer: PromptRendererDep,
+    gateway: LLMGatewayDep,
+    guardrails: GuardrailsRuntimeDep,
+):
+    return build_chat_workflow(settings, retriever, compression, renderer, gateway, guardrails)
+
+
+ChatWorkflowDep = Annotated[object, Depends(get_chat_workflow)]
+
+
+async def get_chat_orchestrator(
+    settings: SettingsDep,
+    memory: ConversationMemoryServiceDep,
+    guardrails: GuardrailsRuntimeDep,
+    workflow: ChatWorkflowDep,
+    copilot_repository: CopilotRepositoryDep,
+) -> ChatOrchestratorService:
+    return ChatOrchestratorService(
+        settings,
+        memory,
+        guardrails,
+        workflow,
+        copilot_repository,
+    )
+
+
+ChatOrchestratorServiceDep = Annotated[ChatOrchestratorService, Depends(get_chat_orchestrator)]

@@ -6,6 +6,7 @@ metadata) discovers them via this single package.
 """
 
 from app.models.copilot import Copilot, copilot_knowledge_sources
+from app.models.conversation import ConversationMessage, ConversationSession
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
 
@@ -14,4 +15,6 @@ __all__ = [
     "KnowledgeSource",
     "Document",
     "copilot_knowledge_sources",
+    "ConversationSession",
+    "ConversationMessage",
 ]

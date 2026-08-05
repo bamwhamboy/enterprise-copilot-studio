@@ -1,36 +1,59 @@
 """LLM provider abstraction.
 
-Defines ``BaseLLMProviderClient`` — the interface every provider client
-implements (``generate``, ``stream``, ``health``) — plus one stub client
-per supported provider (OpenAI, Groq, Azure OpenAI, Anthropic).
+Defines the shared LiteLLM-backed client implementation plus one
+concrete client per supported provider (OpenAI, Groq, Azure OpenAI,
+Anthropic, Ollama).
 
-Per Sprint 4's scope: ``generate``/``stream`` deliberately raise
-``NotImplementedError``. No network call is made anywhere in this
-module. ``health()`` *is* real — it reports whether a provider has the
-configuration it would need, without touching the network — because
-that's a legitimate, callable capability that doesn't require an SDK
-or an API call.
+Sprint 4 defined this interface with `generate`/`stream` stubs that
+deliberately raised NotImplementedError. Sprint 5 completes it: every
+client now makes a real call via LiteLLM (github.com/BerriAI/litellm),
+which gives a single, uniform acompletion()/acompletion(stream=True)
+call surface across all five providers. Provider selection is entirely
+configuration-driven -- to_litellm_model() below is the only place that
+knows each provider's LiteLLM model-string prefix; no other code
+branches on provider identity.
+
+health() is unchanged from Sprint 4 -- still config-only, no network call.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+import litellm
+
 from app.core.config import Settings
+from app.core.logging import get_logger
 from app.llm.models import (
     GenerationRequest,
     GenerationResponse,
+    LLMMessage,
     LLMProvider,
     ProviderHealth,
     StreamChunk,
+    TokenUsage,
 )
+
+logger = get_logger(__name__)
+
+# LiteLLM identifies a provider by prefixing the model string, e.g.
+# "groq/llama-3.1-70b-versatile" or "anthropic/claude-3-5-sonnet-latest".
+# OpenAI models need no prefix. This is the *only* place provider-specific
+# string formatting happens -- everything else in the app deals in our own
+# LLMProvider enum and plain model names.
+_LITELLM_PREFIXES: dict[LLMProvider, str] = {
+    LLMProvider.OPENAI: "",
+    LLMProvider.GROQ: "groq/",
+    LLMProvider.AZURE_OPENAI: "azure/",
+    LLMProvider.ANTHROPIC: "anthropic/",
+    LLMProvider.OLLAMA: "ollama/",
+}
 
 
 @dataclass(frozen=True)
 class ProviderConfig:
-    """Static, per-provider configuration derived from ``Settings``."""
+    """Static, per-provider configuration derived from Settings."""
 
     provider: LLMProvider
     api_key: str | None
@@ -39,25 +62,39 @@ class ProviderConfig:
     configured: bool
 
 
-class BaseLLMProviderClient(ABC):
-    """The interface every provider client must implement.
+def to_litellm_model(provider: LLMProvider, model: str) -> str:
+    """Build the LiteLLM-format model string for a (provider, model) pair.
 
-    Sprint 4 defines this contract only — see module docstring for what
-    is and isn't implemented.
+    Idempotent: if `model` already carries a provider prefix, it's
+    returned unchanged rather than double-prefixed.
+    """
+    if "/" in model:
+        return model
+    return f"{_LITELLM_PREFIXES[provider]}{model}"
+
+
+def _messages_to_dicts(messages: list[LLMMessage]) -> list[dict[str, str]]:
+    # LiteLLM (like every OpenAI-compatible API) has no "developer" role
+    # distinct from "system" -- Sprint 4's Prompt Engine models it
+    # separately for template organization, but on the wire both are
+    # sent as "system" messages, in order.
+    return [
+        {"role": "system" if m.role == "developer" else m.role, "content": m.content}
+        for m in messages
+    ]
+
+
+class LiteLLMProviderClient:
+    """Shared LiteLLM-backed implementation of generate()/stream().
+
+    Subclassed once per provider purely for clear naming/typing at call
+    sites (OpenAIProviderClient vs. GroqProviderClient, etc.) -- the
+    actual call logic is identical; only self.config (and thus the
+    LiteLLM model prefix / api_base / api_key) differs.
     """
 
     def __init__(self, config: ProviderConfig) -> None:
         self.config = config
-
-    @abstractmethod
-    async def generate(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate a single completion. Not implemented in Sprint 4."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def stream(self, request: GenerationRequest) -> AsyncIterator[StreamChunk]:
-        """Stream a completion chunk by chunk. Not implemented in Sprint 4."""
-        raise NotImplementedError
 
     def health(self) -> ProviderHealth:
         """Report configuration readiness. Makes no network calls."""
@@ -73,55 +110,100 @@ class BaseLLMProviderClient(ABC):
             message=message,
         )
 
-
-class _InterfaceOnlyProviderClient(BaseLLMProviderClient):
-    """Shared stub body for generate/stream.
-
-    Subclassed once per provider purely for clear naming/typing at call
-    sites (``OpenAIProviderClient`` vs. ``GroqProviderClient``, etc.) —
-    behavior is identical: raise, clearly, with no network I/O.
-    """
+    def _call_kwargs(self, request: GenerationRequest) -> dict:
+        model = to_litellm_model(self.config.provider, request.model or self.config.default_model)
+        kwargs: dict = {
+            "model": model,
+            "messages": _messages_to_dicts(request.messages),
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+        }
+        if self.config.api_key:
+            kwargs["api_key"] = self.config.api_key
+        if self.config.base_url:
+            kwargs["api_base"] = self.config.base_url
+        return kwargs
 
     async def generate(self, request: GenerationRequest) -> GenerationResponse:
-        raise NotImplementedError(
-            f"{self.config.provider.value} generation is not implemented in Sprint 4 "
-            "— this sprint defines the provider interface only."
+        """Generate a single completion via LiteLLM."""
+        kwargs = self._call_kwargs(request)
+        logger.info(
+            "LiteLLM generate() [request_id=%s model=%s]", request.request_id, kwargs["model"]
+        )
+        response = await litellm.acompletion(**kwargs)
+
+        choice = response.choices[0]
+        content = choice.message.content or ""
+        usage = getattr(response, "usage", None)
+
+        return GenerationResponse(
+            content=content,
+            provider=self.config.provider,
+            model=request.model or self.config.default_model,
+            usage=TokenUsage(
+                prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                total_tokens=getattr(usage, "total_tokens", 0) or 0,
+            ),
         )
 
     async def stream(self, request: GenerationRequest) -> AsyncIterator[StreamChunk]:
-        raise NotImplementedError(
-            f"{self.config.provider.value} streaming is not implemented in Sprint 4 "
-            "— this sprint defines the provider interface only."
+        """Stream a completion chunk by chunk via LiteLLM."""
+        kwargs = self._call_kwargs(request)
+        kwargs["stream"] = True
+        logger.info(
+            "LiteLLM stream() [request_id=%s model=%s]", request.request_id, kwargs["model"]
         )
-        yield  # pragma: no cover — keeps this a generator function; unreachable.
+        model = request.model or self.config.default_model
+
+        response_stream = await litellm.acompletion(**kwargs)
+        async for chunk in response_stream:
+            delta = chunk.choices[0].delta
+            text = getattr(delta, "content", None) or ""
+            finish_reason = chunk.choices[0].finish_reason
+            yield StreamChunk(
+                delta=text,
+                provider=self.config.provider,
+                model=model,
+                is_final=finish_reason is not None,
+            )
 
 
-class OpenAIProviderClient(_InterfaceOnlyProviderClient):
-    """OpenAI provider client. Interface only — see module docstring."""
+class OpenAIProviderClient(LiteLLMProviderClient):
+    """OpenAI provider client, via LiteLLM."""
 
 
-class GroqProviderClient(_InterfaceOnlyProviderClient):
-    """Groq provider client. Interface only — see module docstring."""
+class GroqProviderClient(LiteLLMProviderClient):
+    """Groq provider client, via LiteLLM."""
 
 
-class AzureOpenAIProviderClient(_InterfaceOnlyProviderClient):
-    """Azure OpenAI provider client. Interface only — see module docstring."""
+class AzureOpenAIProviderClient(LiteLLMProviderClient):
+    """Azure OpenAI provider client, via LiteLLM."""
 
 
-class AnthropicProviderClient(_InterfaceOnlyProviderClient):
-    """Anthropic provider client. Interface only — see module docstring."""
+class AnthropicProviderClient(LiteLLMProviderClient):
+    """Anthropic provider client, via LiteLLM."""
 
 
-_CLIENT_CLASSES: dict[LLMProvider, type[BaseLLMProviderClient]] = {
+class OllamaProviderClient(LiteLLMProviderClient):
+    """Ollama (local/self-hosted) provider client, via LiteLLM."""
+
+
+# Kept as the shared base type name other modules (gateway.py) import.
+BaseLLMProviderClient = LiteLLMProviderClient
+
+
+_CLIENT_CLASSES: dict[LLMProvider, type[LiteLLMProviderClient]] = {
     LLMProvider.OPENAI: OpenAIProviderClient,
     LLMProvider.GROQ: GroqProviderClient,
     LLMProvider.AZURE_OPENAI: AzureOpenAIProviderClient,
     LLMProvider.ANTHROPIC: AnthropicProviderClient,
+    LLMProvider.OLLAMA: OllamaProviderClient,
 }
 
 
 def build_provider_configs(settings: Settings) -> dict[LLMProvider, ProviderConfig]:
-    """Derive one ``ProviderConfig`` per supported provider from ``Settings``."""
+    """Derive one ProviderConfig per supported provider from Settings."""
     return {
         LLMProvider.OPENAI: ProviderConfig(
             provider=LLMProvider.OPENAI,
@@ -153,10 +235,20 @@ def build_provider_configs(settings: Settings) -> dict[LLMProvider, ProviderConf
             default_model="claude-3-5-sonnet-latest",
             configured=bool(settings.ANTHROPIC_API_KEY),
         ),
+        LLMProvider.OLLAMA: ProviderConfig(
+            provider=LLMProvider.OLLAMA,
+            api_key=None,
+            base_url=settings.OLLAMA_BASE_URL,
+            default_model="llama3",
+            # Ollama is a local/self-hosted server, not an API-key-gated
+            # SaaS -- "configured" means reachable-in-principle (a base
+            # URL is set), not "has credentials".
+            configured=bool(settings.OLLAMA_BASE_URL),
+        ),
     }
 
 
-def build_provider_clients(settings: Settings) -> dict[LLMProvider, BaseLLMProviderClient]:
+def build_provider_clients(settings: Settings) -> dict[LLMProvider, LiteLLMProviderClient]:
     """Build one client instance per provider, wired to its derived config."""
     configs = build_provider_configs(settings)
     return {provider: _CLIENT_CLASSES[provider](config) for provider, config in configs.items()}

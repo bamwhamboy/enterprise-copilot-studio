@@ -20,14 +20,15 @@ class LLMProvider(str, Enum):
 
     Adding a provider here is a configuration change; it does not, by
     itself, add API-calling capability — that happens when a concrete
-    client's ``generate``/``stream`` methods are implemented in a
-    future sprint.
+    client's ``generate``/``stream`` methods are implemented (Sprint 5,
+    via LiteLLM — see ``providers.py``).
     """
 
     OPENAI = "openai"
     GROQ = "groq"
     AZURE_OPENAI = "azure_openai"
     ANTHROPIC = "anthropic"
+    OLLAMA = "ollama"
 
 
 MessageRole = Literal["system", "developer", "user", "assistant"]

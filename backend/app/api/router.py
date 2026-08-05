@@ -8,7 +8,7 @@ probes behind load balancers). Business endpoints are mounted under
 
 from fastapi import APIRouter
 
-from app.api.v1 import chunks, copilots, documents, health, index, knowledge_sources, search
+from app.api.v1 import chat, chunks, copilots, documents, health, index, knowledge_sources, search
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -23,5 +23,6 @@ v1_router.include_router(documents.router)
 v1_router.include_router(index.router)
 v1_router.include_router(search.router)
 v1_router.include_router(chunks.router)
+v1_router.include_router(chat.router)
 
 api_router.include_router(v1_router)
