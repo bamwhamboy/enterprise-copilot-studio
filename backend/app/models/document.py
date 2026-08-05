@@ -51,6 +51,10 @@ class Document(Base):
     # "UPLOADED" | "PROCESSING" | "READY" | "FAILED"; None for documents
     # created via the Sprint 2 JSON endpoint (no file involved).
     processing_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Sprint 3B: "NOT_INDEXED" | "INDEXING" | "INDEXED" | "FAILED" — tracks
+    # the RAG indexing pipeline, distinct from the ingestion pipeline above.
+    # A document can be READY (parsed) but NOT_INDEXED (not yet embedded).
+    index_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

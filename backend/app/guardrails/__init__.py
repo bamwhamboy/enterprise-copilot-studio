@@ -1,6 +1,10 @@
-"""AI middleware: guardrails, prompt sanitization, and output validation.
+"""Guardrails: reusable validation framework.
 
-Reserved for prompt injection detection, PII detection, output
-validation, and policy enforcement around model calls. Not yet
-implemented.
+Sprint 4 implements: ``validator.py`` (the ``InputValidator``/
+``OutputValidator`` interfaces and shared ``ValidationResult`` shape)
+and ``prompt_sanitizer.py`` (real, rule-based blocked-prompt detection,
+plus ``PromptInjectionDetector``/``PIIDetector`` interfaces for later
+sprints to implement and inject).
+
+No AI logic — blocked-term matching is deterministic string matching.
 """

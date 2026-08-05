@@ -10,6 +10,7 @@ from app.schemas.common import ORMBaseModel
 
 DocumentStatus = Literal["pending", "processing", "indexed"]
 ProcessingStatus = Literal["UPLOADED", "PROCESSING", "READY", "FAILED"]
+IndexStatus = Literal["NOT_INDEXED", "INDEXING", "INDEXED", "FAILED"]
 
 
 class DocumentCreate(BaseModel):
@@ -44,5 +45,6 @@ class DocumentRead(ORMBaseModel):
     mime_type: str | None = None
     file_size_bytes: int | None = None
     processing_status: ProcessingStatus | None = None
+    index_status: IndexStatus | None = None
     created_at: datetime
     updated_at: datetime

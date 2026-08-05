@@ -16,11 +16,24 @@ os.environ.setdefault("STORAGE_DIR", _TEST_STORAGE_DIR)
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from llama_index.core.embeddings import MockEmbedding
+from qdrant_client import QdrantClient
 
+from app.core.dependencies import get_embed_model, get_qdrant_client
 from app.database.base import Base
 from app.database.session import engine
 from app.main import app
 from app.models import Copilot, Document, KnowledgeSource  # noqa: F401  (populates Base.metadata)
+
+# Sprint 3B: override the real HuggingFaceEmbedding (needs network access to
+# huggingface.co, unavailable in this environment) with LlamaIndex's own
+# MockEmbedding — same interface, deterministic, no network. Qdrant runs
+# in-memory rather than against a real server. These overrides test the
+# indexing/retrieval *pipeline* for real; they don't validate embedding
+# quality, which isn't this sprint's concern.
+_test_qdrant_client = QdrantClient(":memory:")
+app.dependency_overrides[get_embed_model] = lambda: MockEmbedding(embed_dim=384)
+app.dependency_overrides[get_qdrant_client] = lambda: _test_qdrant_client
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)

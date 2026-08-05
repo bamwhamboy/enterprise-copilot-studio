@@ -5,12 +5,20 @@ FastAPI backend for Enterprise Copilot Studio.
 - **Sprint 1 (foundation)**: app skeleton, configuration, logging, `GET /health`.
 - **Sprint 2 (persistence)**: PostgreSQL, SQLAlchemy, the repository pattern,
   and CRUD APIs for **Copilot**, **KnowledgeSource**, and **Document**.
-- **Sprint 3A (this update)**: the Enterprise Knowledge Engine's
+- **Sprint 3A (ingestion)**: the Enterprise Knowledge Engine's
   **ingestion pipeline** — `POST /documents/upload` accepts real PDFs,
   saves them to disk, extracts text and metadata via PyMuPDF, and
-  registers everything in PostgreSQL. Still **no retrieval, no AI**: no
-  Qdrant, no embeddings, no chunking, no LangGraph, no LiteLLM, no chat,
-  no reranking, no citations.
+  registers everything in PostgreSQL.
+- **Sprint 4 (AI infrastructure)**: the AI infrastructure future RAG and
+  Copilot implementations sit on — an LLM Gateway with a real
+  provider-routing layer, a Planner interface, a Guardrails validation
+  framework, a Prompt Engine, and Correlation ID propagation.
+- **Sprint 3B (this update)**: the **Enterprise Retrieval Engine** —
+  hierarchical chunking, embeddings, indexing into Qdrant, and hybrid
+  (semantic + BM25) retrieval with citation-preserving context
+  compression. Still no chat, no LiteLLM calls, no LangGraph execution,
+  no agents, no HR Copilot, no prompt engineering wired to an LLM, no
+  tool calling.
 
 ## Tech Stack
 
@@ -119,6 +127,225 @@ Notes:
 `DELETE /api/v1/documents/{id}` now also deletes the PDF and its `.txt` sidecar from disk, not just the DB row.
 
 No chunking, no embeddings, no Qdrant, no LLM calls anywhere in this flow.
+
+## AI Infrastructure (Sprint 4)
+
+The architecture future RAG (Sprint 3B) and multi-provider Copilot chat
+(Sprint 5) will be built on. **Nothing here makes a network call or an
+LLM API call** — this sprint builds routing, interfaces, and
+configuration only.
+
+```
+app/
+├── llm/
+│   ├── models.py       # LLMProvider enum, LLMMessage, GenerationRequest/Response,
+│   │                    # StreamChunk, ProviderHealth — shared, strongly-typed contracts
+│   ├── providers.py     # BaseLLMProviderClient interface + one stub client per
+│   │                    # provider (OpenAI/Groq/Azure OpenAI/Anthropic). health() is
+│   │                    # real (reports config readiness); generate()/stream() raise
+│   │                    # NotImplementedError — no API calls anywhere.
+│   └── gateway.py       # LLMGateway — REAL provider/model selection + routing logic,
+│                         # delegates to the resolved provider client
+├── planner/
+│   ├── task.py          # Task model (id, status, depends_on — enough for a DAG)
+│   └── planner.py       # Planner ABC (plan()/execute()) — pure interface, no
+│                         # concrete implementation, no LangGraph
+├── guardrails/
+│   ├── validator.py      # ValidationResult/ValidationSeverity + InputValidator/
+│   │                      # OutputValidator interfaces
+│   └── prompt_sanitizer.py  # PromptSanitizer — REAL rule-based blocked-phrase
+│                             # detection; PromptInjectionDetector/PIIDetector are
+│                             # interfaces, composed in via constructor injection
+├── prompt_engine/          # New package
+│   ├── templates.py      # PromptTemplate (system/developer/user) + a small
+│   │                      # built-in library
+│   └── renderer.py        # PromptRenderer — REAL string-template rendering,
+│                           # raises MissingPromptVariableError on incomplete input
+└── middleware/
+    ├── correlation.py     # New — Correlation ID contextvar + header propagation
+    └── request_context.py # Extended (not rewritten) — Sprint 1's Request ID +
+                            # timing + X-Request-ID header are unchanged; now also
+                            # sets a request_id contextvar and resolves/propagates
+                            # the Correlation ID via X-Correlation-ID
+```
+
+`app/core/logging.py` was extended with a `_ContextFilter` that reads
+both contextvars and injects `request_id`/`correlation_id` into **every**
+log line automatically — "structured logging context" without any call
+site needing to pass them explicitly. (A deferred, call-time import
+inside the filter avoids a circular import with `request_context.py`,
+which already imports `get_logger` from this same module.)
+
+`app/core/config.py` gained `DEFAULT_LLM_PROVIDER`, `DEFAULT_LLM_MODEL`,
+`DEFAULT_TEMPERATURE`, `DEFAULT_MAX_TOKENS`, and credentials for all four
+providers (`ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY`,
+`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION` — `GROQ_API_KEY`/
+`OPENAI_API_KEY` already existed from Sprint 1).
+
+`app/core/dependencies.py` gained `LLMGatewayDep`, `PromptSanitizerDep`,
+and `PromptRendererDep` — not consumed by any route yet (no chat/RAG
+endpoints exist), but ready for Sprint 3B/5 to `Depends(...)` on, exactly
+like every existing service in this file.
+
+### How this gets used by Sprint 3B and Sprint 5
+
+- **Sprint 3B (retrieval / RAG)** will read documents this sprint's
+  ingestion pipeline registered, chunk and embed them (new modules
+  under `knowledge_engine/`), and use **`PromptRenderer`** to assemble
+  the retrieved context into a `GenerationRequest` — without touching
+  `llm/` or `guardrails/` at all, since those interfaces are already
+  stable.
+- **Sprint 5 (copilot chat)** will implement concrete
+  `generate()`/`stream()` methods on the provider clients in
+  `providers.py` (turning the `NotImplementedError` stubs into real API
+  calls), implement a concrete `Planner` (`app/planner/planner.py`) —
+  likely LangGraph-based — that produces `Task`s and calls `LLMGateway`
+  to execute them, and implement real `PromptInjectionDetector`/
+  `PIIDetector` classes that plug into the *existing*
+  `PromptSanitizer(injection_detector=..., pii_detector=...)`
+  constructor with no changes to `PromptSanitizer` itself.
+- In both cases, a new chat/RAG router will `Depends(LLMGatewayDep)`,
+  `Depends(PromptSanitizerDep)`, and `Depends(PromptRendererDep)` — the
+  DI wiring this sprint added is what makes that a same-pattern,
+  low-friction addition rather than new plumbing.
+
+## Enterprise Retrieval Engine (Sprint 3B)
+
+Real, working RAG infrastructure built primarily on LlamaIndex, verified
+end to end against real (in-memory) Qdrant and PyMuPDF-generated PDFs.
+**One caveat**: this sandbox has no network access to `huggingface.co`,
+so the real `BAAI/bge-small-en-v1.5` embedding model can't be downloaded
+here — the code path is real (`app/knowledge_engine/embeddings/embedding_model.py`
+builds the actual `HuggingFaceEmbedding`), but everything was verified
+using LlamaIndex's `MockEmbedding` (identical interface, no network) so
+the pipeline mechanics — chunking, indexing, hybrid retrieval, fusion,
+compression, citations — are proven correct; only embedding *quality*
+is unverified in this environment.
+
+```
+app/knowledge_engine/
+├── models.py              # ChunkMetadata, HierarchicalChunk, Citation, RetrievedChunk
+├── chunking/
+│   └── hierarchical_chunker.py   # HierarchicalNodeParser-based chunker (Document ->
+│                                   # Section -> Subsection -> Paragraph, parent-child
+│                                   # relationships preserved)
+├── embeddings/
+│   └── embedding_model.py         # HuggingFaceEmbedding factory (BAAI/bge-small-en-v1.5)
+├── indexing/
+│   ├── vector_store.py            # QdrantClient + QdrantVectorStore wiring
+│   └── indexing_service.py        # chunk -> embed -> store -> update Postgres status
+├── retrieval/
+│   └── hybrid_retriever.py        # semantic (Qdrant) + BM25, fused via RRF
+├── compression/
+│   └── compression_service.py     # top-N selection + per-chunk truncation, citations preserved
+└── citations/
+    └── citation_builder.py        # NodeWithScore -> Citation/RetrievedChunk
+```
+
+### A real bug found and fixed during development
+
+LlamaIndex's internal `node_to_metadata_dict` (used whenever a node is
+written to *any* vector store) unconditionally overwrites a
+`"document_id"` metadata key with `node.ref_doc_id` — legacy
+Chroma/Pinecone/Qdrant compatibility code. Since our nodes have no
+`ref_doc_id` set, this silently clobbered our real document id with the
+literal string `"None"`, breaking `GET /chunks/{document_id}`'s filter.
+Fixed by storing our field as `source_document_id` instead — see
+`indexing_service.py`'s `_chunk_to_node`.
+
+### Hierarchical chunking without NLTK
+
+`HierarchicalNodeParser`'s default per-level splitter (`SentenceSplitter`)
+needs NLTK's `punkt` tokenizer data, downloaded at runtime — blocked in
+this sandbox (no network to nltk's data servers). Swapped in
+`TokenTextSplitter` (tiktoken-based, fully offline) via
+`node_parser_map`/`node_parser_ids`, which — note — must be passed
+*together*; passing `node_parser_map` alongside `chunk_sizes` instead of
+`node_parser_ids` silently ignores the custom map.
+
+### Qdrant Collection Schema
+
+Collection: `knowledge_chunks` (configurable via `QDRANT_COLLECTION_NAME`)
+
+| Field | Type | Notes |
+|---|---|---|
+| vector | `float[384]`, cosine distance | from `BAAI/bge-small-en-v1.5` (`EMBEDDING_DIMENSION`) |
+| `text` (via `_node_content`) | string | chunk text, stored in LlamaIndex's serialized node payload |
+| `source_document_id` | string (UUID) | renamed from `document_id` — see bug note above |
+| `knowledge_source_id` | string (UUID) | filterable — used by both search and BM25 corpus scoping |
+| `document_name` | string | original filename |
+| `page_number`, `section`, `subsection` | string/int, nullable | not populated by plain-text extraction (see below) |
+| `chunk_number` | int | position within the document |
+| `created_at` | ISO datetime string | |
+
+Confirmed via `client.get_collection("knowledge_chunks").config.params.vectors`:
+`size=384 distance=Distance.COSINE`.
+
+**Note on `page_number`/`section`/`subsection`**: these are part of every
+chunk's metadata shape but are `None` in this sprint — PDF text
+extraction (Sprint 3A, PyMuPDF) produces plain text with no layout
+information, so section/subsection/page boundaries aren't derivable
+without a layout-aware parser. The fields exist now so a future,
+layout-aware ingestion path can populate them without changing this
+shape or any downstream consumer (search results, citations).
+
+### API
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/v1/index/{document_id}` | Index a `READY` (parsed) document: chunk, embed, store, update status |
+| `GET /api/v1/search?q=...` | Hybrid search — optional `knowledge_source_id`, `top_k` |
+| `GET /api/v1/chunks/{document_id}` | List all indexed chunks for a document |
+
+Indexing a document requires `processing_status == "READY"` (set by
+Sprint 3A's ingestion pipeline) — indexing a not-yet-parsed or
+JSON-created (no file) document returns `409 Conflict`.
+
+### Example Search Request
+
+```bash
+curl "http://localhost:8000/api/v1/search?q=How%20many%20leave%20days%20do%20employees%20get&knowledge_source_id=<uuid>&top_k=5"
+```
+
+Response:
+
+```json
+{
+  "query": "How many leave days do employees get",
+  "results": [
+    {
+      "text": "Employees receive 20 days of paid annual leave per year.",
+      "score": 0.0328,
+      "chunk_id": "06f81744-bcd5-4f5a-bc8a-96a78a376fb8",
+      "citation": {
+        "document_name": "leave_policy.pdf",
+        "knowledge_source_id": "11c99cbb-e7ae-423d-835b-9d43e19e8370",
+        "page_number": null,
+        "section": null,
+        "chunk_number": 0,
+        "score": 0.0328
+      }
+    }
+  ]
+}
+```
+
+### How to Test
+
+```bash
+cd backend
+pip install -r requirements.txt
+pytest tests/test_rag_pipeline.py -v
+```
+
+8 tests cover: index → search → chunks round-tripping, a 409 on
+not-ready documents, 404 on missing documents, empty-result handling
+when nothing's indexed yet, citation correctness, and
+`knowledge_source_id` filtering. All run against real (in-memory)
+Qdrant with `MockEmbedding` — see `tests/conftest.py`'s
+`app.dependency_overrides`. In an environment with network access to
+huggingface.co, remove those overrides to test against the real
+embedding model.
 
 ## How to Run
 
@@ -252,7 +479,9 @@ alembic revision --autogenerate -m "description"
 alembic upgrade head
 ```
 
-## New Dependencies (Sprint 3A)
+## New Dependencies
+
+**Sprint 3A:**
 
 | Package | Why |
 |---|---|
@@ -260,10 +489,27 @@ alembic upgrade head
 | `pymupdf` (imports as `fitz`) | PDF text extraction and page counting |
 | `aiofiles` | Async file writes/reads in the storage service, off the event loop |
 
+**Sprint 4:** none. Everything (provider interfaces, planner, guardrails,
+prompt engine, correlation middleware) is built on Pydantic, FastAPI, and
+the standard library (`abc`, `contextvars`, `enum`) already in the project.
+
+**Sprint 3B:**
+
+| Package | Why |
+|---|---|
+| `llama-index-core` | Hierarchical chunking, indexing, retrieval orchestration |
+| `llama-index-embeddings-huggingface` | `BAAI/bge-small-en-v1.5` embeddings |
+| `llama-index-vector-stores-qdrant` | Qdrant integration for LlamaIndex |
+| `llama-index-retrievers-bm25` | BM25 sparse retrieval |
+| `qdrant-client` | Vector database client (pinned to 1.18.0 — see version note in `requirements.txt`) |
+
 ## What's Intentionally Not Here
 
-Still not implemented, per scope: Qdrant, embeddings, chunking,
-LangGraph, LiteLLM, chat APIs, retrieval, reranking, citations, and
-authentication. These land in a future sprint, building on the
-documents this one registers and the text it extracts.
+Still not implemented, per scope: chat APIs, LiteLLM calls, LangGraph
+execution, agents, an HR Copilot, prompt engineering wired to an actual
+LLM call, and tool calling. Sprint 3B built real retrieval
+infrastructure (chunking, embeddings, indexing, hybrid search,
+compression, citations) that a future chat/copilot sprint will consume
+via `GET /api/v1/search` — no code in this repository makes an LLM API
+call.
 

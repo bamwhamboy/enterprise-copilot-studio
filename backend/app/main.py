@@ -22,6 +22,7 @@ from app.core.exceptions import (
 )
 from app.core.logging import configure_logging, get_logger
 from app.database.session import dispose_engine
+from app.knowledge_engine.indexing.indexing_service import DocumentNotReadyError
 from app.middleware.request_context import RequestContextMiddleware
 
 logger = get_logger(__name__)
@@ -94,6 +95,15 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(DocumentNotReadyError)
+    async def document_not_ready_handler(
+        request: Request, exc: DocumentNotReadyError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(exc)},
         )
 

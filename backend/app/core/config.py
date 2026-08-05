@@ -19,7 +19,7 @@ Settings are grouped by concern:
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import computed_field
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["local", "development", "staging", "production"]
@@ -70,12 +70,40 @@ class Settings(BaseSettings):
     LLM_GATEWAY_BASE_URL: str | None = None
     GROQ_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    AZURE_OPENAI_API_KEY: str | None = None
+    AZURE_OPENAI_ENDPOINT: str | None = None
+    AZURE_OPENAI_API_VERSION: str = "2024-10-21"
 
     # --- Knowledge ingestion (Sprint 3A) -------------------------------------
     # Base directory (relative to the process working directory, or absolute)
     # where uploaded documents and their extracted text are stored.
     STORAGE_DIR: str = "storage/documents"
     MAX_UPLOAD_SIZE_MB: int = 25
+
+    # --- LLM defaults (Sprint 4 — AI infrastructure, no calls made) ---------
+    # These are the defaults the LLM Gateway (app/llm/gateway.py) and
+    # Prompt Engine (app/prompt_engine/) fall back to when a caller doesn't
+    # specify an override. Nothing in this codebase calls a model with them
+    # yet — Sprint 4 builds only the routing/config layer.
+    DEFAULT_LLM_PROVIDER: Literal["groq", "openai", "azure_openai", "anthropic"] = "groq"
+    DEFAULT_LLM_MODEL: str = "groq-llama-3"
+    DEFAULT_TEMPERATURE: float = 0.2
+    DEFAULT_MAX_TOKENS: int = 1024
+
+    # --- Enterprise Hybrid Hierarchical RAG (Sprint 3B) -----------------------
+    QDRANT_COLLECTION_NAME: str = "knowledge_chunks"
+    EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
+    EMBEDDING_DIMENSION: int = 384
+    # Hierarchical chunking sizes, largest (document/section) to smallest
+    # (paragraph), in tokens — passed straight to LlamaIndex's
+    # HierarchicalNodeParser.
+    CHUNK_SIZES: list[int] = Field(default_factory=lambda: [2048, 512, 128])
+    HYBRID_SEMANTIC_TOP_K: int = 10
+    HYBRID_BM25_TOP_K: int = 10
+    HYBRID_FINAL_TOP_K: int = 5
+    CONTEXT_COMPRESSION_MAX_CHUNKS: int = 5
+    CONTEXT_COMPRESSION_MAX_CHARS_PER_CHUNK: int = 1200
 
 
 @lru_cache
