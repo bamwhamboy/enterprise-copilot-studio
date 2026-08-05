@@ -20,7 +20,12 @@ class CopilotCreate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     domain: CopilotDomain = "hr"
     status: CopilotStatus = "draft"
-    model: str = Field(default="groq-llama-3", max_length=100)
+    # Kept in sync with Settings.DEFAULT_LLM_MODEL (app/core/config.py) --
+    # this is the value actually persisted for API-created copilots that
+    # don't specify their own model (the ORM column's own default is
+    # never reached, since the service always passes this field through
+    # explicitly).
+    model: str = Field(default="llama-3.3-70b-versatile", max_length=100)
     knowledge_source_ids: list[uuid.UUID] = Field(default_factory=list)
 
 

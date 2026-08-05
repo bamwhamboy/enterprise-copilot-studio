@@ -20,6 +20,7 @@ class ChatState(TypedDict, total=False):
     user_message: str
     copilot_name: str
     domain: str
+    copilot_model: str | None
     knowledge_source_id: str | None
     history: list[LLMMessage]
 

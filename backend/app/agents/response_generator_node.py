@@ -21,6 +21,12 @@ makes a single node implementation serve both entry points:
 No other node, and no orchestrator code, duplicates this call or the
 guardrail enforcement -- there is exactly one place a response is
 generated.
+
+Model selection: uses the selected Copilot's own `model` field
+(state["copilot_model"]) when set; falls through to
+Settings.DEFAULT_LLM_MODEL otherwise via the existing
+`request.model or self.config.default_model` fallback already in
+app/llm/providers.py -- no changes needed there.
 """
 
 from __future__ import annotations
@@ -40,6 +46,11 @@ def make_response_generator_node(
     async def response_generator_node(state: ChatState) -> dict:
         request = GenerationRequest(
             messages=state["llm_messages"],
+            # Prefer the selected Copilot's own configured model; None/""
+            # falls through to Settings.DEFAULT_LLM_MODEL via the existing
+            # `request.model or self.config.default_model` fallback in
+            # app/llm/providers.py.
+            model=state.get("copilot_model") or None,
             temperature=settings.DEFAULT_TEMPERATURE,
             max_tokens=settings.DEFAULT_MAX_TOKENS,
         )

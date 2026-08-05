@@ -356,3 +356,92 @@ async def test_chat_stream_delivers_chunks_incrementally_not_buffered(
                 received_order.append(payload["delta"])
 
     assert received_order == produced_order == ["Hel", "lo ", "world"]
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_the_copilots_configured_model(client: AsyncClient, monkeypatch) -> None:
+    """The copilot's own `model` field must reach the actual LiteLLM call."""
+    ks = (await client.post(KS_BASE, json={"name": "Model Selection Source"})).json()
+    copilot = (
+        await client.post(
+            COPILOT_BASE,
+            json={
+                "name": "Custom Model Copilot",
+                "knowledge_source_ids": [ks["id"]],
+                "model": "openai/gpt-oss-120b",
+            },
+        )
+    ).json()
+    assert copilot["model"] == "openai/gpt-oss-120b"
+
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured.update(kwargs)
+
+        async def gen():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"), finish_reason="stop")]
+            )
+
+        return gen()
+
+    monkeypatch.setattr("app.llm.providers.litellm.acompletion", fake_stream)
+
+    response = await client.post(
+        CHAT_BASE,
+        json={"copilot_id": copilot["id"], "user_id": "user-10", "message": "hello"},
+    )
+
+    assert response.status_code == 200
+    # "groq/" prefix comes from to_litellm_model(); the copilot's own model
+    # name ("openai/gpt-oss-120b") is preserved as-is since it already
+    # contains a "/" (see to_litellm_model's idempotency check).
+    assert captured["model"] == "openai/gpt-oss-120b"
+
+
+@pytest.mark.asyncio
+async def test_chat_falls_back_to_default_model_when_copilot_has_none(
+    client: AsyncClient, monkeypatch
+) -> None:
+    """An empty copilot.model must fall through to Settings.DEFAULT_LLM_MODEL,
+    not be sent to LiteLLM as an empty/invalid model string.
+    """
+    from app.core.config import get_settings
+
+    ks = (await client.post(KS_BASE, json={"name": "Fallback Model Source"})).json()
+    copilot = (
+        await client.post(
+            COPILOT_BASE,
+            json={
+                "name": "No Model Copilot",
+                "knowledge_source_ids": [ks["id"]],
+                "model": "",
+            },
+        )
+    ).json()
+    assert copilot["model"] == ""
+
+    captured = {}
+
+    async def fake_stream(**kwargs):
+        captured.update(kwargs)
+
+        async def gen():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"), finish_reason="stop")]
+            )
+
+        return gen()
+
+    monkeypatch.setattr("app.llm.providers.litellm.acompletion", fake_stream)
+
+    response = await client.post(
+        CHAT_BASE,
+        json={"copilot_id": copilot["id"], "user_id": "user-11", "message": "hello"},
+    )
+
+    assert response.status_code == 200
+    settings = get_settings()
+    assert settings.DEFAULT_LLM_MODEL != ""  # sanity: the fallback target is real
+    assert captured["model"] == f"groq/{settings.DEFAULT_LLM_MODEL}"

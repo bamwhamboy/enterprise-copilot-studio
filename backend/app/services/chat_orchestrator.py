@@ -85,6 +85,11 @@ class ChatOrchestratorService:
             "user_message": request.message,
             "copilot_name": copilot.name,
             "domain": copilot.domain,
+            # The copilot's own model choice, if it has one. Falsy (None or
+            # "") falls through to Settings.DEFAULT_LLM_MODEL via the
+            # existing `request.model or self.config.default_model` fallback
+            # already in app/llm/providers.py -- no change needed there.
+            "copilot_model": copilot.model,
             "knowledge_source_id": knowledge_source_id,
             "history": history,
         }

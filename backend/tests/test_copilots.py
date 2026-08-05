@@ -20,7 +20,7 @@ async def test_create_copilot_minimal(client: AsyncClient) -> None:
     assert body["name"] == "Minimal Copilot"
     assert body["domain"] == "hr"
     assert body["status"] == "draft"
-    assert body["model"] == "groq-llama-3"
+    assert body["model"] == "llama-3.3-70b-versatile"
     assert body["knowledge_sources"] == []
 
 

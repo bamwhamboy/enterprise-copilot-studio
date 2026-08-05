@@ -45,7 +45,12 @@ class Copilot(Base):
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     domain: Mapped[str] = mapped_column(String(100), nullable=False, default="hr")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
-    model: Mapped[str] = mapped_column(String(100), nullable=False, default="groq-llama-3")
+    # Kept in sync with Settings.DEFAULT_LLM_MODEL (app/core/config.py) so a
+    # newly-created copilot's own default doesn't drift from the platform
+    # default -- both should point at the same current, real model id.
+    model: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="llama-3.3-70b-versatile"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
