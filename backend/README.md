@@ -454,8 +454,8 @@ to Ollama (no API key needed) confirming the integration reaches LiteLLM's actua
 ```bash
 cd backend
 docker compose up --build
-docker compose exec api alembic upgrade head
 ```
+(Migrations now run automatically on container start — see "Deploying to Render" below for why this changed.)
 
 **2. Swagger sequence** at `http://localhost:8000/docs`:
 1. `POST /api/v1/knowledge-sources` — create one (e.g. `{"name": "HR Policies"}`)
@@ -622,8 +622,9 @@ frontend's `lib/workspace-name.ts` and its README for the exact scheme.
 ```bash
 cd backend
 docker compose up --build
-docker compose exec api alembic upgrade head    # seeds the 5 roles
 ```
+Migrations (including seeding the 5 roles) now run automatically on
+container start.
 
 **2. Swagger sequence** at `http://localhost:8000/docs`:
 1. `POST /api/v1/auth/register` — `{"email": "admin@acme.com", "password": "SecurePass123", "organization_name": "Acme Corp"}`
@@ -689,11 +690,49 @@ cp .env.example .env
 docker compose up --build
 ```
 
-On first run, apply migrations inside the running container:
+Migrations now run automatically on container start (see
+`docker-entrypoint.sh`) — no separate manual step needed. It's still
+always safe to run manually if you want to apply a new migration
+without restarting the container:
 
 ```bash
 docker compose exec api alembic upgrade head
 ```
+
+### Deploying to Render
+
+The most common cause of a fresh Render deployment failing with
+`asyncpg.exceptions.UndefinedTableError: relation "users" does not
+exist` is simply that `alembic upgrade head` was never run against the
+Render database — there's no `docker compose exec`-equivalent
+available for a deployed service, so a manual migration step (as used
+locally, above) is easy to miss entirely on a first deploy.
+
+This is now handled automatically: `docker-entrypoint.sh` runs
+`alembic upgrade head` before starting the server on **every**
+container start, including on Render. `alembic upgrade head` is
+idempotent — on a fresh database it creates every table and seeds the
+5 RBAC roles; on a redeploy where the schema is already current, it's
+a fast no-op.
+
+Two things specific to Render worth double-checking:
+- **`DATABASE_URL` must use `postgresql+asyncpg://`**, not plain
+  `postgresql://`. Render's own auto-generated connection string for
+  an attached PostgreSQL instance is typically the latter — this
+  project's async SQLAlchemy setup requires the `+asyncpg` driver
+  suffix explicitly.
+- Render provides the port your service must listen on via a `$PORT`
+  environment variable, which isn't necessarily `8000`. The entrypoint
+  script already respects this (`${PORT:-8000}`), so no action is
+  needed here — just don't override the container's start command with
+  a hardcoded `--port 8000` in Render's dashboard, or this gets
+  bypassed.
+
+If you ever need to run a migration manually against the Render
+database from your own machine (e.g. to debug), point `DATABASE_URL`
+at Render's connection string locally and run `alembic upgrade head`
+directly — no Docker required for this, since `alembic/env.py` reads
+the URL from the same `Settings` object the app itself uses.
 
 ### Option B — Local virtualenv
 
