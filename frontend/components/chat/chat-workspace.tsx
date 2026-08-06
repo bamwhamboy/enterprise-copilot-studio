@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Database, Loader2 } from "lucide-react";
+import { ArrowLeft, Database } from "lucide-react";
 
 import { copilotsApi } from "@/lib/api/copilots";
 import { streamChat } from "@/lib/api/chat";
+import { checkHealth } from "@/lib/api/health";
 import { useAuthStore } from "@/store/auth-store";
 import { useChatStore, useCopilotSessions } from "@/store/chat-store";
 import type { ChatMessage } from "@/types/chat";
@@ -16,6 +17,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ModelBadge } from "@/components/chat/model-badge";
 import { ConversationList } from "@/components/chat/conversation-list";
 import { MessageList } from "@/components/chat/message-list";
+import { CopilotWarmingUp } from "@/components/chat/copilot-warming-up";
 import { MessageErrorBoundary } from "@/components/chat/message-error-boundary";
 import { SuggestedPrompts } from "@/components/chat/suggested-prompts";
 import { ChatInput } from "@/components/chat/chat-input";
@@ -86,6 +88,19 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
       streamingMessageRef.current = null;
     }
   }, [updateMessage]);
+
+  // Fire a lightweight, fire-and-forget request the moment the chat
+  // opens, before the user has typed anything. This can't reduce the
+  // backend's own LLM/retrieval latency (no endpoint exists for that,
+  // and this sprint intentionally doesn't add backend endpoints for a
+  // frontend polish pass) -- but it does mean any idle connection pool
+  // or lazy-initialized backend resource gets touched during the
+  // "reading the welcome screen" moment rather than during the first
+  // real query, which is exactly when a cold-start delay is most
+  // noticeable.
+  useEffect(() => {
+    checkHealth();
+  }, []);
 
   // Cancel any in-flight generation when the user navigates away from
   // this copilot's chat entirely (not just switching conversations
@@ -232,11 +247,7 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
   }
 
   if (isCopilotLoading) {
-    return (
-      <div className="flex h-[calc(100vh-6rem)] items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <CopilotWarmingUp />;
   }
 
   if (!copilot) {

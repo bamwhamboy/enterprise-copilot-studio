@@ -13,13 +13,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SourceCard } from "@/components/knowledge-sources/source-card";
 import { CreateSourceDialog } from "@/components/knowledge-sources/create-source-dialog";
+import { ErrorState } from "@/components/shared/error-state";
 
 export default function KnowledgeSourcesPage() {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const { data: sources, isLoading } = useQuery({
+  const { data: sources, isLoading, isError, refetch } = useQuery({
     queryKey: ["knowledge-sources"],
     queryFn: knowledgeSourcesApi.list,
     refetchInterval: (query) => {
@@ -96,7 +97,9 @@ export default function KnowledgeSourcesPage() {
         </div>
       )}
 
-      {isLoading ? (
+      {isError ? (
+        <ErrorState onRetry={() => refetch()} showReturnToDashboard={false} />
+      ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((i) => (
             <Card key={i}>

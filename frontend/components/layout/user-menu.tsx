@@ -4,6 +4,7 @@ import { LogOut, Settings, UserRound } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useAuthStore } from "@/store/auth-store";
+import { useChatStore } from "@/store/chat-store";
 import { logoutRequest } from "@/lib/api/auth";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -44,13 +45,20 @@ export function UserMenu() {
     // never unmounts, so without this, a *different* user logging in on
     // the same browser could briefly see this user's cached data.
     queryClient.clear();
+    // Chat sessions persist to localStorage independently of the auth
+    // store (so history survives a refresh) -- which means without this,
+    // they'd also survive a *logout*, and a different user signing in on
+    // the same browser would see the previous user's conversations.
+    useChatStore.persist.clearStorage();
     logout();
-    // No explicit navigation here on purpose: AuthGuard's own effect
-    // (components/auth/auth-guard.tsx) reacts to accessToken becoming
-    // null and is the single source of truth for redirecting to /login.
-    // Having both this handler and AuthGuard push/replace to the same
-    // destination independently was a real race that could produce a
-    // glitchy/blank transition.
+    // A hard navigation here is deliberate, not an oversight: relying on
+    // AuthGuard's reactive redirect (an effect responding to accessToken
+    // becoming null) means React has to reconcile the entire
+    // authenticated tree away client-side, which is exactly the kind of
+    // transition that produced a blank-screen flash. A full navigation
+    // sidesteps that reconciliation entirely and guarantees a completely
+    // clean slate -- arguably the correct behavior for "log out" anyway.
+    window.location.href = "/login";
   }
 
   return (

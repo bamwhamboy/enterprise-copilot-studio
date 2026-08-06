@@ -24,11 +24,11 @@ import { LaunchCopilotButton } from "@/components/shared/launch-copilot-button";
 
 const MODEL = "llama-3.3-70b-versatile";
 const CREATION_STEPS: SequenceStepDef[] = [
-  { id: "create", label: "Creating Copilot" },
-  { id: "metadata", label: "Registering Metadata" },
-  { id: "retrieval", label: "Initializing Retrieval" },
-  { id: "linking", label: "Linking Knowledge Sources" },
-  { id: "agent", label: "Preparing AI Agent" },
+  { id: "create", label: "Setting up your copilot" },
+  { id: "metadata", label: "Saving your configuration" },
+  { id: "retrieval", label: "Connecting your knowledge sources" },
+  { id: "linking", label: "Personalizing your assistant" },
+  { id: "agent", label: "Finishing touches" },
   { id: "ready", label: "Ready" },
 ];
 

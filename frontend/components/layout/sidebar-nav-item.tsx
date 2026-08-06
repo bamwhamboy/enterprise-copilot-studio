@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { cn } from "@/lib/utils";
+import { prefetchForRoute } from "@/lib/route-prefetch";
 import type { NavItem } from "@/types/nav";
 import {
   Tooltip,
@@ -23,13 +25,18 @@ export function SidebarNavItem({
   onNavigate,
 }: SidebarNavItemProps) {
   const pathname = usePathname();
+  const queryClient = useQueryClient();
   const isActive =
     item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+
+  const handlePrefetch = () => prefetchForRoute(queryClient, item.href);
 
   const link = (
     <Link
       href={item.href}
       onClick={onNavigate}
+      onMouseEnter={handlePrefetch}
+      onFocus={handlePrefetch}
       className={cn(
         "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
         "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",

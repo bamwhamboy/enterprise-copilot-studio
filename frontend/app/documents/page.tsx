@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/shared/error-state";
 import {
   ProcessingStatusBadge,
   IndexStatusBadge,
@@ -29,7 +30,7 @@ export default function DocumentsPage() {
     queryFn: knowledgeSourcesApi.list,
   });
 
-  const { data: documents, isLoading } = useQuery({
+  const { data: documents, isLoading, isError, refetch } = useQuery({
     queryKey: ["documents", sourceFilter, page],
     queryFn: () =>
       documentsApi.list({
@@ -89,22 +90,25 @@ export default function DocumentsPage() {
         </select>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="flex flex-col gap-3 p-4">
-              {[0, 1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-10 w-full rounded-md" />
-              ))}
-            </div>
-          ) : filteredDocuments.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-              <p className="text-sm font-medium text-foreground">No documents found</p>
-              <p className="text-xs text-muted-foreground">
-                Try a different search term, filter, or upload a document from Knowledge Sources.
-              </p>
-            </div>
-          ) : (
+      {isError ? (
+        <ErrorState onRetry={() => refetch()} showReturnToDashboard={false} />
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            {isLoading ? (
+              <div className="flex flex-col gap-3 p-4">
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-10 w-full rounded-md" />
+                ))}
+              </div>
+            ) : filteredDocuments.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+                <p className="text-sm font-medium text-foreground">No documents found</p>
+                <p className="text-xs text-muted-foreground">
+                  Try a different search term, filter, or upload a document from Knowledge Sources.
+                </p>
+              </div>
+            ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -139,9 +143,10 @@ export default function DocumentsPage() {
                 </tbody>
               </table>
             </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">

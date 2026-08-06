@@ -1,30 +1,18 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Sparkles, ShieldCheck, Workflow, Database } from "lucide-react";
-
-const highlights = [
-  {
-    icon: Workflow,
-    title: "LangGraph-orchestrated copilots",
-    description: "Multi-step retrieval, grounding, and citation in one workflow.",
-  },
-  {
-    icon: Database,
-    title: "Hybrid Hierarchical RAG",
-    description: "Semantic + BM25 retrieval over your enterprise knowledge.",
-  },
-  {
-    icon: ShieldCheck,
-    title: "Enterprise-grade security",
-    description: "JWT auth, role-based access, and organization isolation.",
-  },
-];
+import { Sparkles } from "lucide-react";
 
 /**
  * Shared branding panel for the auth screens (login, register) -- a
  * single source of truth so both pages stay visually identical rather
  * than two copies drifting apart over time.
+ *
+ * Deliberately minimal: branding, product name, and tagline only. This
+ * used to also list technology highlights (LangGraph, hybrid RAG,
+ * etc.) -- implementation details that don't belong on a public-facing
+ * auth screen. That kind of information lives in the README/
+ * architecture docs instead.
  */
 export function AuthBrandingPanel({
   headline,
@@ -56,39 +44,15 @@ export function AuthBrandingPanel({
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, delay: 0.1 }}
-        className="relative flex flex-col gap-10"
+        className="relative"
       >
-        <div>
-          <h1 className="max-w-md text-3xl font-semibold leading-tight tracking-tight text-white">
-            {headline}
-          </h1>
-          <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/60">
-            One platform for retrieval-grounded chat, knowledge management, and
-            enterprise-grade governance — built on your own data.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-5">
-          {highlights.map((item, index) => (
-            <motion.div
-              key={item.title}
-              initial={{ opacity: 0, x: -8 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.4, delay: 0.2 + index * 0.08 }}
-              className="flex items-start gap-3.5"
-            >
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white backdrop-blur-sm">
-                <item.icon className="size-4" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-white">{item.title}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-white/50">
-                  {item.description}
-                </p>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+        <h1 className="max-w-md text-3xl font-semibold leading-tight tracking-tight text-white">
+          {headline}
+        </h1>
+        <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/60">
+          One platform for grounded, trustworthy AI conversations — built on your
+          organization&apos;s own knowledge.
+        </p>
       </motion.div>
 
       <p className="relative text-xs text-white/35">

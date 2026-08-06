@@ -14,6 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CopilotCard } from "@/components/copilots/copilot-card";
 import { CopilotFormDialog } from "@/components/copilots/copilot-form-dialog";
+import { ErrorState } from "@/components/shared/error-state";
 
 export default function CopilotsPage() {
   const queryClient = useQueryClient();
@@ -21,7 +22,7 @@ export default function CopilotsPage() {
   const [editingCopilot, setEditingCopilot] = useState<Copilot | undefined>(undefined);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const { data: copilots, isLoading } = useQuery({
+  const { data: copilots, isLoading, isError, refetch } = useQuery({
     queryKey: ["copilots"],
     queryFn: copilotsApi.list,
   });
@@ -86,7 +87,9 @@ export default function CopilotsPage() {
         }
       />
 
-      {isLoading ? (
+      {isError ? (
+        <ErrorState onRetry={() => refetch()} showReturnToDashboard={false} />
+      ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((i) => (
             <Card key={i}>

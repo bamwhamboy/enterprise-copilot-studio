@@ -31,6 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/shared/error-state";
 
 function timeAgo(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -51,7 +52,12 @@ export default function DashboardPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const { data: copilots, isLoading: copilotsLoading } = useQuery({
+  const {
+    data: copilots,
+    isLoading: copilotsLoading,
+    isError: copilotsError,
+    refetch: refetchCopilots,
+  } = useQuery({
     queryKey: ["copilots"],
     queryFn: copilotsApi.list,
   });
@@ -228,7 +234,9 @@ export default function DashboardPage() {
             title="Your Copilots"
             description="Jump back into a recently created copilot."
           >
-            {copilotsLoading ? (
+            {copilotsError ? (
+              <ErrorState onRetry={() => refetchCopilots()} showReturnToDashboard={false} />
+            ) : copilotsLoading ? (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {[0, 1].map((i) => (
                   <Skeleton key={i} className="h-40 w-full rounded-xl" />
