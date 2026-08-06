@@ -1,22 +1,20 @@
 "use client";
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   Database,
   FileStack,
   MessagesSquare,
-  Users,
-  Landmark,
-  Building2,
-  Laptop,
   Sparkles,
   FilePlus2,
   FolderPlus,
+  Loader2,
 } from "lucide-react";
 
-import type { StatCardData, MarketplaceCopilotData, ActivityItemData } from "@/types/dashboard";
+import type { StatCardData, ActivityItemData } from "@/types/dashboard";
+import type { Copilot, CopilotCreatePayload } from "@/types/copilot";
 import { useAuthStore } from "@/store/auth-store";
 import { useChatStore } from "@/store/chat-store";
 import { copilotsApi } from "@/lib/api/copilots";
@@ -26,18 +24,13 @@ import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { DashboardSection } from "@/components/dashboard/dashboard-section";
 import { LivePlatformHealth } from "@/components/dashboard/live-platform-health";
-import { MarketplaceCopilotCard } from "@/components/dashboard/marketplace-copilot-card";
+import { CopilotCard } from "@/components/copilots/copilot-card";
+import { CopilotFormDialog } from "@/components/copilots/copilot-form-dialog";
 import { ActivityTimeline } from "@/components/dashboard/activity-timeline";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-
-const CATEGORY_ICONS: Record<string, typeof Users> = {
-  hr: Users,
-  finance: Landmark,
-  procurement: Building2,
-  it: Laptop,
-};
 
 function timeAgo(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -53,6 +46,10 @@ function timeAgo(iso: string): string {
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
   const chatSessions = useChatStore((s) => s.sessions);
+  const queryClient = useQueryClient();
+  const [editingCopilot, setEditingCopilot] = useState<Copilot | undefined>(undefined);
+  const [formOpen, setFormOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const { data: copilots, isLoading: copilotsLoading } = useQuery({
     queryKey: ["copilots"],
@@ -65,19 +62,49 @@ export default function DashboardPage() {
   const { data: organizations } = useQuery({
     queryKey: ["organizations"],
     queryFn: organizationsApi.list,
+    // An organization's own name/id essentially never changes mid-session
+    // -- no reason to re-verify this as eagerly as the default 60s.
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: CopilotCreatePayload) =>
+      copilotsApi.update(editingCopilot!.id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["copilots"] });
+      setFormOpen(false);
+      setEditingCopilot(undefined);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => copilotsApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["copilots"] });
+      setDeletingId(null);
+    },
   });
 
   const organization = organizations?.find((o) => o.id === user?.organization_id) ?? organizations?.[0];
   const totalDocuments = sources?.reduce((sum, s) => sum + s.documents.length, 0) ?? 0;
   const activeCopilots = copilots?.filter((c) => c.status === "active").length ?? 0;
 
+  const draftCopilots = (copilots?.length ?? 0) - activeCopilots;
+
+  const copilotTrendLabel = (() => {
+    if (!copilots || copilots.length === 0) return undefined;
+    if (activeCopilots === 0) return "All in draft";
+    if (draftCopilots === 0) return "All active";
+    return `${activeCopilots} active · ${draftCopilots} draft`;
+  })();
+
   const kpiCards: StatCardData[] = [
     {
       id: "active-copilots",
-      label: "Active Copilots",
-      value: copilotsLoading ? "—" : String(activeCopilots),
+      label: "Copilots",
+      value: copilotsLoading ? "—" : String(copilots?.length ?? 0),
       icon: Bot,
-      trendLabel: copilots ? `${copilots.length} total` : undefined,
+      trendLabel: copilotTrendLabel,
       trendDirection: "flat",
     },
     {
@@ -103,19 +130,6 @@ export default function DashboardPage() {
       trendDirection: "flat",
     },
   ];
-
-  const marketplaceCopilots: MarketplaceCopilotData[] = useMemo(() => {
-    if (!copilots || copilots.length === 0) return [];
-    return copilots.slice(0, 4).map((copilot) => ({
-      id: copilot.id,
-      name: copilot.name,
-      description: copilot.description || `${copilot.domain.toUpperCase()} copilot`,
-      category: copilot.domain,
-      icon: CATEGORY_ICONS[copilot.domain] ?? Bot,
-      status: copilot.status === "active" ? "available" : "coming-soon",
-      href: copilot.status === "active" ? `/copilots/${copilot.id}/chat` : "/copilots",
-    }));
-  }, [copilots]);
 
   const activityItems: ActivityItemData[] = useMemo(() => {
     const events: (ActivityItemData & { sortKey: string })[] = [];
@@ -220,10 +234,18 @@ export default function DashboardPage() {
                   <Skeleton key={i} className="h-40 w-full rounded-xl" />
                 ))}
               </div>
-            ) : marketplaceCopilots.length > 0 ? (
+            ) : copilots && copilots.length > 0 ? (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {marketplaceCopilots.map((copilot) => (
-                  <MarketplaceCopilotCard key={copilot.id} data={copilot} />
+                {copilots.slice(0, 4).map((copilot) => (
+                  <CopilotCard
+                    key={copilot.id}
+                    copilot={copilot}
+                    onEdit={() => {
+                      setEditingCopilot(copilot);
+                      setFormOpen(true);
+                    }}
+                    onDelete={() => setDeletingId(copilot.id)}
+                  />
                 ))}
               </div>
             ) : (
@@ -253,6 +275,49 @@ export default function DashboardPage() {
           </Card>
         </DashboardSection>
       </div>
+
+      <CopilotFormDialog
+        key={editingCopilot?.id ?? "edit"}
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        copilot={editingCopilot}
+        knowledgeSources={sources ?? []}
+        onSubmit={(payload) => updateMutation.mutate(payload)}
+        isSubmitting={updateMutation.isPending}
+      />
+
+      {deletingId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-[2px]"
+          onClick={() => setDeletingId(null)}
+        >
+          <Card className="w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <CardContent className="flex flex-col gap-4 pt-6">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Delete this copilot?</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  This can&apos;t be undone. Conversations tied to it will remain, but it can no
+                  longer be launched.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setDeletingId(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => deleteMutation.mutate(deletingId)}
+                  disabled={deleteMutation.isPending}
+                >
+                  {deleteMutation.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                  Delete
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

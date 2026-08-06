@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const quickActions: QuickAction[] = [
-  { id: "new-copilot", label: "Create Copilot", icon: Plus, href: "/copilots" },
+  { id: "new-copilot", label: "Create Copilot", icon: Plus, href: "/create-copilot" },
   { id: "add-source", label: "Add Knowledge Source", icon: Database, href: "/knowledge-sources" },
   { id: "invite", label: "Invite Teammate", icon: UserPlus, href: "/settings" },
   { id: "docs", label: "View Documentation", icon: BookOpen, href: "/help" },

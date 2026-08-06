@@ -28,6 +28,14 @@ function statusVariant(status: ApiKnowledgeSource["status"]) {
   return "secondary" as const;
 }
 
+function formatCreatedAt(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 interface SourceCardProps {
   source: ApiKnowledgeSource;
   onDelete: () => void;
@@ -71,6 +79,9 @@ export function SourceCard({ source, onDelete }: SourceCardProps) {
             <Link href={`/knowledge-sources/${source.id}`} className="text-sm font-semibold text-foreground hover:text-primary">
               {source.name}
             </Link>
+            <span className="text-[11px] text-muted-foreground/70">
+              Created {formatCreatedAt(source.created_at)}
+            </span>
           </div>
 
           <div className="flex items-center gap-4 text-xs text-muted-foreground">

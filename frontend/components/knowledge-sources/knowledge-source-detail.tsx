@@ -3,10 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, FileText, Loader2, Sparkles, Trash2 } from "lucide-react";
+import { motion } from "framer-motion";
+import { ArrowLeft, CheckCircle2, FileText, Loader2, Sparkles, Trash2 } from "lucide-react";
 
 import { knowledgeSourcesApi } from "@/lib/api/knowledge-sources";
 import { documentsApi } from "@/lib/api/documents";
+import { invalidateKnowledgeData } from "@/lib/query-invalidation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,16 +35,33 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
   const { data: source, isLoading } = useQuery({
     queryKey: ["knowledge-source", knowledgeSourceId],
     queryFn: () => knowledgeSourcesApi.get(knowledgeSourceId),
+    // Poll while anything is mid-flight (upload just landed, still being
+    // parsed, or actively indexing) so the list updates itself the moment
+    // a document finishes -- no manual refresh required. Stops polling
+    // automatically once every document is in a terminal state
+    // (READY+INDEXED or FAILED).
+    refetchInterval: (query) => {
+      const documents = query.state.data?.documents ?? [];
+      const hasInFlightDocument = documents.some(
+        (doc) =>
+          doc.processing_status === "UPLOADED" ||
+          doc.processing_status === "PROCESSING" ||
+          doc.index_status === "INDEXING"
+      );
+      return hasInFlightDocument ? 3000 : false;
+    },
   });
 
   const deleteDocMutation = useMutation({
     mutationFn: (documentId: string) => documentsApi.remove(documentId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["knowledge-source", knowledgeSourceId] });
+      invalidateKnowledgeData(queryClient, knowledgeSourceId);
     },
   });
 
   async function handleFilesSelected(files: File[]) {
+    let anySucceeded = false;
+
     for (const file of files) {
       const taskId = `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setUploads((prev) => [...prev, { id: taskId, file, progress: 0, status: "uploading" }]);
@@ -64,7 +83,8 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
         await knowledgeSourcesApi.indexDocument(document.id);
 
         setUploads((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: "done" } : t)));
-        queryClient.invalidateQueries({ queryKey: ["knowledge-source", knowledgeSourceId] });
+        invalidateKnowledgeData(queryClient, knowledgeSourceId);
+        anySucceeded = true;
       } catch (err) {
         const message = (err as { message?: string })?.message ?? "Upload failed.";
         setUploads((prev) =>
@@ -72,11 +92,18 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
         );
       }
     }
+
+    if (anySucceeded) {
+      // Brief pause so the user sees the "Indexed" confirmation before
+      // leaving, then return to the list -- counts are already fresh
+      // (invalidateKnowledgeData above), no manual Back/refresh needed.
+      setTimeout(() => router.push("/knowledge-sources"), 1200);
+    }
   }
 
   async function handleIndexNow(documentId: string) {
     await knowledgeSourcesApi.indexDocument(documentId);
-    queryClient.invalidateQueries({ queryKey: ["knowledge-source", knowledgeSourceId] });
+    invalidateKnowledgeData(queryClient, knowledgeSourceId);
   }
 
   if (isLoading) {
@@ -149,7 +176,17 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
                         Indexing…
                       </span>
                     )}
-                    {task.status === "done" && <span className="text-success">Done</span>}
+                    {task.status === "done" && (
+                      <motion.span
+                        initial={{ scale: 0.5, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                        className="flex items-center gap-1 text-success"
+                      >
+                        <CheckCircle2 className="size-3.5" />
+                        Indexed
+                      </motion.span>
+                    )}
                     {task.status === "error" && <span className="text-destructive">Failed</span>}
                   </div>
                 </div>

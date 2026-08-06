@@ -139,7 +139,10 @@ export function CopilotFormDialog({
                       checked={selectedSourceIds.includes(source.id)}
                       onCheckedChange={() => toggleSource(source.id)}
                     />
-                    {source.name}
+                    <span className="flex-1">{source.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {source.documents.length} doc{source.documents.length !== 1 ? "s" : ""}
+                    </span>
                   </label>
                 ))}
               </div>

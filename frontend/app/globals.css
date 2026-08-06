@@ -111,40 +111,47 @@
 }
 
 .dark {
-  --background: hsl(240 18% 7%);
-  --foreground: hsl(240 10% 92%);
+  /* Premium charcoal, not near-black -- softer and more neutral than
+     the previous heavily blue-tinted, very-low-lightness background. */
+  --background: hsl(240 10% 9%);
+  --foreground: hsl(240 10% 94%);
 
-  --card: hsl(240 16% 10%);
-  --card-foreground: hsl(240 10% 92%);
-  --popover: hsl(240 16% 10%);
-  --popover-foreground: hsl(240 10% 92%);
+  /* Noticeably lighter than background for real elevation -- the
+     previous ~3-point lightness delta between background and card was
+     too subtle to read as "elevated" at a glance. */
+  --card: hsl(240 9% 13%);
+  --card-foreground: hsl(240 10% 94%);
+  --popover: hsl(240 9% 14%);
+  --popover-foreground: hsl(240 10% 94%);
 
-  --primary: hsl(255 75% 68%);
-  --primary-foreground: hsl(240 18% 9%);
-  --secondary: hsl(240 12% 15%);
-  --secondary-foreground: hsl(240 10% 90%);
+  --primary: hsl(258 82% 68%);
+  --primary-foreground: hsl(240 15% 8%);
+  --secondary: hsl(240 8% 18%);
+  --secondary-foreground: hsl(240 8% 92%);
 
-  --muted: hsl(240 12% 14%);
-  --muted-foreground: hsl(240 8% 65%);
-  --accent: hsl(255 40% 20%);
-  --accent-foreground: hsl(255 70% 85%);
+  --muted: hsl(240 8% 16%);
+  --muted-foreground: hsl(240 6% 68%);
+  --accent: hsl(258 38% 24%);
+  --accent-foreground: hsl(258 75% 86%);
 
-  --destructive: hsl(0 70% 55%);
+  --destructive: hsl(0 68% 58%);
   --destructive-foreground: hsl(0 0% 100%);
-  --success: hsl(152 55% 45%);
+  --success: hsl(152 50% 48%);
   --success-foreground: hsl(0 0% 100%);
-  --warning: hsl(38 92% 55%);
+  --warning: hsl(38 88% 58%);
   --warning-foreground: hsl(240 15% 10%);
 
-  --border: hsl(240 12% 18%);
-  --input: hsl(240 12% 18%);
-  --ring: hsl(255 75% 68%);
+  /* Softer borders -- a touch lighter than before, so dividers read as
+     gentle separation against the charcoal rather than hard lines. */
+  --border: hsl(240 8% 22%);
+  --input: hsl(240 8% 22%);
+  --ring: hsl(258 82% 68%);
 
-  --chart-1: hsl(255 75% 68%);
-  --chart-2: hsl(217 91% 65%);
-  --chart-3: hsl(199 89% 60%);
-  --chart-4: hsl(280 65% 68%);
-  --chart-5: hsl(231 80% 70%);
+  --chart-1: hsl(258 82% 68%);
+  --chart-2: hsl(217 88% 66%);
+  --chart-3: hsl(199 85% 62%);
+  --chart-4: hsl(280 62% 68%);
+  --chart-5: hsl(231 78% 70%);
 
   /* Sidebar stays the same dark surface in both modes */
 }

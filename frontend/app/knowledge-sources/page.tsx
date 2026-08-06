@@ -5,6 +5,7 @@ import { Library, Plus, Loader2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { knowledgeSourcesApi } from "@/lib/api/knowledge-sources";
+import { invalidateKnowledgeData } from "@/lib/query-invalidation";
 import type { KnowledgeSourceCreatePayload } from "@/types/knowledge-source";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -21,12 +22,24 @@ export default function KnowledgeSourcesPage() {
   const { data: sources, isLoading } = useQuery({
     queryKey: ["knowledge-sources"],
     queryFn: knowledgeSourcesApi.list,
+    refetchInterval: (query) => {
+      const list = query.state.data ?? [];
+      const hasInFlightDocument = list.some((source) =>
+        source.documents.some(
+          (doc) =>
+            doc.processing_status === "UPLOADED" ||
+            doc.processing_status === "PROCESSING" ||
+            doc.index_status === "INDEXING"
+        )
+      );
+      return hasInFlightDocument ? 3000 : false;
+    },
   });
 
   const createMutation = useMutation({
     mutationFn: (payload: KnowledgeSourceCreatePayload) => knowledgeSourcesApi.create(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] });
+      invalidateKnowledgeData(queryClient);
       setCreateOpen(false);
     },
   });
@@ -34,7 +47,7 @@ export default function KnowledgeSourcesPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => knowledgeSourcesApi.remove(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] });
+      invalidateKnowledgeData(queryClient);
       setDeletingId(null);
     },
   });

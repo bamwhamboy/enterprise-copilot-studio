@@ -69,3 +69,23 @@ export function IndexStatusBadge({ status }: { status: DocumentIndexStatus | nul
       );
   }
 }
+
+/**
+ * Appends a short disambiguator (creation date) only to entries whose
+ * name collides with another source in the same list -- keeps labels
+ * clean in the common case, and makes duplicates (e.g. several
+ * "HR Policies" created while testing) distinguishable without a
+ * redesign of whatever's rendering the list.
+ */
+export function disambiguatedSourceLabel<T extends { id: string; name: string; created_at: string }>(
+  source: T,
+  allSources: T[]
+): string {
+  const nameCount = allSources.filter((s) => s.name === source.name).length;
+  if (nameCount <= 1) return source.name;
+  const date = new Date(source.created_at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  return `${source.name} (${date})`;
+}

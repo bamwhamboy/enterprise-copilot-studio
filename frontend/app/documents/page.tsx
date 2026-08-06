@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
   ProcessingStatusBadge,
   IndexStatusBadge,
+  disambiguatedSourceLabel,
 } from "@/components/shared/document-status-badges";
 
 const PAGE_SIZE = 10;
@@ -82,7 +83,7 @@ export default function DocumentsPage() {
           <option value="all">All knowledge sources</option>
           {sources?.map((source) => (
             <option key={source.id} value={source.id}>
-              {source.name}
+              {disambiguatedSourceLabel(source, sources)}
             </option>
           ))}
         </select>

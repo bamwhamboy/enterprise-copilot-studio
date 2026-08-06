@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { ArrowRight, Bell } from "lucide-react";
+import { Bell } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { MarketplaceCopilotData } from "@/types/dashboard";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LaunchCopilotButton } from "@/components/shared/launch-copilot-button";
 
 export function MarketplaceCopilotCard({
   data,
@@ -46,26 +47,16 @@ export function MarketplaceCopilotCard({
           <p className="text-xs text-muted-foreground">{data.description}</p>
         </div>
 
-        <Button
-          asChild
-          variant={isAvailable ? "default" : "outline"}
-          size="sm"
-          className="w-full"
-        >
-          <Link href={data.href}>
-            {isAvailable ? (
-              <>
-                Launch Copilot
-                <ArrowRight className="size-3.5" />
-              </>
-            ) : (
-              <>
-                Notify Me
-                <Bell className="size-3.5" />
-              </>
-            )}
-          </Link>
-        </Button>
+        {isAvailable ? (
+          <LaunchCopilotButton copilotId={data.id} copilotName={data.name} className="w-full" />
+        ) : (
+          <Button asChild variant="outline" size="sm" className="w-full">
+            <Link href={data.href}>
+              Notify Me
+              <Bell className="size-3.5" />
+            </Link>
+          </Button>
+        )}
       </CardContent>
     </Card>
   );

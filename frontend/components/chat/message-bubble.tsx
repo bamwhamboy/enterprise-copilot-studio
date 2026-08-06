@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { motion } from "framer-motion";
@@ -29,7 +29,7 @@ interface MessageBubbleProps {
   onRegenerate: () => void;
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   userInitials,
   isLastAssistantMessage,
@@ -89,10 +89,20 @@ export function MessageBubble({
               <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
               <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground" />
             </span>
+          ) : message.isStreaming ? (
+            // Plain text while streaming: re-parsing the full markdown AST
+            // on every single delta chunk is expensive enough (for a
+            // longer response) to noticeably jank the main thread, which
+            // is what made the whole app feel unresponsive during
+            // generation. Switches to full Markdown rendering below once
+            // the message settles.
+            <p className="whitespace-pre-wrap">
+              {message.content}
+              <StreamingCursor />
+            </p>
           ) : (
             <div className="prose prose-sm max-w-none prose-p:leading-relaxed prose-p:my-1.5 prose-pre:bg-muted prose-pre:text-foreground prose-code:text-foreground prose-headings:mt-2 prose-headings:mb-1.5 prose-ul:my-1.5 prose-ol:my-1.5 dark:prose-invert">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-              {message.isStreaming && <StreamingCursor />}
             </div>
           )}
         </div>
@@ -184,4 +194,4 @@ export function MessageBubble({
       </div>
     </motion.div>
   );
-}
+});

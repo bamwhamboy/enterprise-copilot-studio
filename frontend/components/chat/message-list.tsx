@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 
 import type { ChatMessage } from "@/types/chat";
 import { MessageBubble } from "@/components/chat/message-bubble";
+import { MessageErrorBoundary } from "@/components/chat/message-error-boundary";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface MessageListProps {
@@ -28,13 +29,14 @@ export function MessageList({ messages, userInitials, onRegenerate }: MessageLis
   return (
     <div className="flex flex-col gap-5 px-4 py-6 sm:px-8">
       {messages.map((message, index) => (
-        <MessageBubble
-          key={message.id}
-          message={message}
-          userInitials={userInitials}
-          isLastAssistantMessage={index === lastAssistantIndex && !message.isStreaming}
-          onRegenerate={onRegenerate}
-        />
+        <MessageErrorBoundary key={message.id}>
+          <MessageBubble
+            message={message}
+            userInitials={userInitials}
+            isLastAssistantMessage={index === lastAssistantIndex && !message.isStreaming}
+            onRegenerate={onRegenerate}
+          />
+        </MessageErrorBoundary>
       ))}
       <div ref={bottomRef} />
     </div>

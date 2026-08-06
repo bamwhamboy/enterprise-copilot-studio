@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useShallow } from "zustand/react/shallow";
 
 import type { ChatMessage } from "@/types/chat";
 
@@ -131,5 +132,7 @@ export const useChatStore = create<ChatState>()(
 );
 
 export function useCopilotSessions(copilotId: string) {
-  return useChatStore((s) => s.sessions.filter((session) => session.copilotId === copilotId));
+  return useChatStore(
+    useShallow((s) => s.sessions.filter((session) => session.copilotId === copilotId))
+  );
 }

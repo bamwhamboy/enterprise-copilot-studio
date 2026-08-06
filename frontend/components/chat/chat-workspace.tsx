@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Database, Loader2 } from "lucide-react";
 
 import { copilotsApi } from "@/lib/api/copilots";
@@ -10,12 +10,13 @@ import { streamChat } from "@/lib/api/chat";
 import { useAuthStore } from "@/store/auth-store";
 import { useChatStore, useCopilotSessions } from "@/store/chat-store";
 import type { ChatMessage } from "@/types/chat";
-import { COPILOT_DOMAIN_LABELS } from "@/types/copilot";
+import { COPILOT_DOMAIN_LABELS, type Copilot } from "@/types/copilot";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ModelBadge } from "@/components/chat/model-badge";
 import { ConversationList } from "@/components/chat/conversation-list";
 import { MessageList } from "@/components/chat/message-list";
+import { MessageErrorBoundary } from "@/components/chat/message-error-boundary";
 import { SuggestedPrompts } from "@/components/chat/suggested-prompts";
 import { ChatInput } from "@/components/chat/chat-input";
 
@@ -45,9 +46,17 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
 
+  const queryClient = useQueryClient();
   const { data: copilot, isLoading: isCopilotLoading } = useQuery({
     queryKey: ["copilot", copilotId],
     queryFn: () => copilotsApi.get(copilotId),
+    initialData: () =>
+      queryClient.getQueryData<Copilot[]>(["copilots"])?.find((c) => c.id === copilotId),
+    // The seeded value came from the list endpoint, not this specific
+    // detail fetch -- treat it as immediately stale so a real fetch
+    // still happens in the background to catch anything the list
+    // response might not include, without blocking the initial paint.
+    initialDataUpdatedAt: 0,
   });
 
   const sessions = useCopilotSessions(copilotId);
@@ -65,6 +74,31 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const streamingMessageRef = useRef<{ sessionId: string; messageId: string } | null>(null);
+
+  const finalizeAbortedMessage = useCallback(() => {
+    const target = streamingMessageRef.current;
+    if (target) {
+      updateMessage(target.sessionId, target.messageId, {
+        content: "Generation stopped.",
+        isStreaming: false,
+      });
+      streamingMessageRef.current = null;
+    }
+  }, [updateMessage]);
+
+  // Cancel any in-flight generation when the user navigates away from
+  // this copilot's chat entirely (not just switching conversations
+  // within it). Previously nothing aborted the fetch on unmount, so a
+  // response kept generating in the background -- wasted work, and not
+  // what "leave chat while generating" should do.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      finalizeAbortedMessage();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Ensure there's always an active (possibly empty) session once sessions load.
   useEffect(() => {
@@ -97,6 +131,22 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
 
       const controller = new AbortController();
       abortRef.current = controller;
+      streamingMessageRef.current = { sessionId, messageId: assistantId };
+
+      // Safety net: if neither onDone nor onError ever fires for any
+      // reason, this guarantees the UI un-sticks itself rather than
+      // staying in a "generating" state forever.
+      const safetyTimeout = setTimeout(() => {
+        if (streamingMessageRef.current?.messageId === assistantId) {
+          controller.abort();
+          updateMessage(sessionId, assistantId, {
+            content: "This is taking longer than expected. Please try again.",
+            isStreaming: false,
+          });
+          streamingMessageRef.current = null;
+          setIsStreaming(false);
+        }
+      }, 90_000);
 
       await streamChat(
         {
@@ -107,6 +157,8 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
         {
           onChunk: (delta) => appendToMessageContent(sessionId, assistantId, delta),
           onDone: (data) => {
+            clearTimeout(safetyTimeout);
+            streamingMessageRef.current = null;
             if (sessionId !== data.session_id) {
               assignRealSessionId(sessionId, data.session_id);
             }
@@ -119,6 +171,8 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
             setIsStreaming(false);
           },
           onError: (message) => {
+            clearTimeout(safetyTimeout);
+            streamingMessageRef.current = null;
             updateMessage(sessionId, assistantId, {
               content: message || "Something went wrong generating a response.",
               isStreaming: false,
@@ -134,21 +188,27 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
 
   function handleSend(text?: string) {
     const messageText = (text ?? input).trim();
-    if (!messageText || !activeSession || isStreaming) return;
+    if (!messageText || isStreaming) return;
+
+    // Defensive recovery: activeSession should always exist (the effect
+    // above guarantees it), but if it's ever missing for any reason,
+    // create a fresh one rather than silently doing nothing -- a
+    // "working" input that doesn't respond is worse than starting a new
+    // conversation.
+    const session = activeSession ?? sessions.find((s) => s.id === activeSessionId);
+    const targetSessionId = session?.id ?? createDraftSession(copilotId);
 
     setInput("");
-    renameSessionIfUntitled(activeSession.id, messageText);
-    appendMessage(activeSession.id, {
+    renameSessionIfUntitled(targetSessionId, messageText);
+    appendMessage(targetSessionId, {
       id: makeId(),
       role: "user",
       content: messageText,
       createdAt: new Date().toISOString(),
     });
 
-    const backendSessionId = activeSession.id.startsWith("draft-")
-      ? undefined
-      : activeSession.id;
-    runStream(activeSession.id, backendSessionId, messageText);
+    const backendSessionId = targetSessionId.startsWith("draft-") ? undefined : targetSessionId;
+    runStream(targetSessionId, backendSessionId, messageText);
   }
 
   function handleRegenerate() {
@@ -163,6 +223,7 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
 
   function handleStop() {
     abortRef.current?.abort();
+    finalizeAbortedMessage();
     setIsStreaming(false);
   }
 
@@ -253,11 +314,13 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
               onSelect={(prompt) => handleSend(prompt)}
             />
           ) : (
-            <MessageList
-              messages={messages}
-              userInitials={userInitials}
-              onRegenerate={handleRegenerate}
-            />
+            <MessageErrorBoundary>
+              <MessageList
+                messages={messages}
+                userInitials={userInitials}
+                onRegenerate={handleRegenerate}
+              />
+            </MessageErrorBoundary>
           )}
         </ScrollArea>
 

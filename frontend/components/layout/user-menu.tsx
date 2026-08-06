@@ -1,8 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { LogOut, Settings, UserRound } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useAuthStore } from "@/store/auth-store";
 import { logoutRequest } from "@/lib/api/auth";
@@ -15,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import Link from "next/link";
 
 function getInitials(name: string) {
   return name
@@ -26,7 +26,7 @@ function getInitials(name: string) {
 }
 
 export function UserMenu() {
-  const router = useRouter();
+  const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const logout = useAuthStore((s) => s.logout);
@@ -40,8 +40,17 @@ export function UserMenu() {
       // sign-out on it (e.g. if the token's already expired/revoked).
       logoutRequest(refreshToken).catch(() => {});
     }
+    // Clear every cached query -- AuthGuard lives in the root layout and
+    // never unmounts, so without this, a *different* user logging in on
+    // the same browser could briefly see this user's cached data.
+    queryClient.clear();
     logout();
-    router.push("/login");
+    // No explicit navigation here on purpose: AuthGuard's own effect
+    // (components/auth/auth-guard.tsx) reacts to accessToken becoming
+    // null and is the single source of truth for redirecting to /login.
+    // Having both this handler and AuthGuard push/replace to the same
+    // destination independently was a real race that could produce a
+    // glitchy/blank transition.
   }
 
   return (

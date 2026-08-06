@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
 import { login, fetchCurrentUser } from "@/lib/api/auth";
 import { useAuthStore } from "@/store/auth-store";
 import type { ApiError } from "@/services/api-client";
@@ -44,12 +45,20 @@ export default function LoginPage() {
   const router = useRouter();
   const setTokens = useAuthStore((s) => s.setTokens);
   const setUser = useAuthStore((s) => s.setUser);
+  const hasHydrated = useAuthStore((s) => s.hasHydrated);
+  const accessToken = useAuthStore((s) => s.accessToken);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (hasHydrated && accessToken) {
+      router.replace("/");
+    }
+  }, [hasHydrated, accessToken, router]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -61,12 +70,28 @@ export default function LoginPage() {
       setTokens(tokens, rememberMe);
       const user = await fetchCurrentUser();
       setUser(user);
-      router.push("/");
+      router.replace("/");
     } catch (err) {
       const apiError = err as ApiError;
       setError(apiError?.message || "Something went wrong. Please try again.");
       setIsSubmitting(false);
     }
+  }
+
+  // Not yet hydrated (can't know auth state yet), or already
+  // authenticated and about to redirect away -- show a neutral loading
+  // state instead of ever flashing the login form.
+  if (!hasHydrated || accessToken) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <div className="flex size-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-[#5b7cfa] shadow-lg shadow-primary/25">
+            <span className="text-lg font-bold text-primary-foreground">E</span>
+          </div>
+          <Skeleton className="h-2 w-32 rounded-full" />
+        </div>
+      </div>
+    );
   }
 
   return (

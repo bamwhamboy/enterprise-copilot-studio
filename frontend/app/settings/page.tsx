@@ -35,6 +35,9 @@ export default function SettingsPage() {
   const { data: organizations, isLoading: orgLoading } = useQuery({
     queryKey: ["organizations"],
     queryFn: organizationsApi.list,
+    // An organization's own name/id essentially never changes mid-session
+    // -- no reason to re-verify this as eagerly as the default 60s.
+    staleTime: 10 * 60 * 1000,
   });
 
   const { data: copilots, isLoading: copilotsLoading } = useQuery({

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Bot, Plus, Loader2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -56,11 +57,6 @@ export default function CopilotsPage() {
     },
   });
 
-  function openCreate() {
-    setEditingCopilot(undefined);
-    setFormOpen(true);
-  }
-
   function openEdit(copilot: Copilot) {
     setEditingCopilot(copilot);
     setFormOpen(true);
@@ -81,9 +77,11 @@ export default function CopilotsPage() {
         description="Create, configure, and launch enterprise AI copilots grounded in your knowledge sources."
         icon={Bot}
         actions={
-          <Button onClick={openCreate}>
-            <Plus className="size-4" />
-            Create Copilot
+          <Button asChild>
+            <Link href="/create-copilot">
+              <Plus className="size-4" />
+              Create Copilot
+            </Link>
           </Button>
         }
       />
@@ -122,9 +120,11 @@ export default function CopilotsPage() {
             <p className="max-w-sm text-xs text-muted-foreground">
               Create your first copilot and link it to a knowledge source to start chatting.
             </p>
-            <Button onClick={openCreate} size="sm" className="mt-1">
-              <Plus className="size-3.5" />
-              Create Copilot
+            <Button asChild size="sm" className="mt-1">
+              <Link href="/create-copilot">
+                <Plus className="size-3.5" />
+                Create Copilot
+              </Link>
             </Button>
           </CardContent>
         </Card>
