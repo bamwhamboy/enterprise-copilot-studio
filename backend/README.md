@@ -708,12 +708,17 @@ Render database — there's no `docker compose exec`-equivalent
 available for a deployed service, so a manual migration step (as used
 locally, above) is easy to miss entirely on a first deploy.
 
-This is now handled automatically: `docker-entrypoint.sh` runs
-`alembic upgrade head` before starting the server on **every**
-container start, including on Render. `alembic upgrade head` is
-idempotent — on a fresh database it creates every table and seeds the
-5 RBAC roles; on a redeploy where the schema is already current, it's
-a fast no-op.
+This is now handled automatically: `docker-entrypoint.sh` first waits
+for the database to accept connections (`wait_for_db.py` — retries
+every 2 seconds, up to 30 attempts / 60 seconds, since Render's
+Postgres isn't guaranteed to be immediately reachable the instant this
+container starts, particularly on the database's very first boot),
+then runs `alembic upgrade head` before starting the server, on
+**every** container start, including on Render. `alembic upgrade head`
+is idempotent — verified directly by running it twice in a row against
+the same database: the first run applies all 5 migrations and seeds
+the 5 RBAC roles, the second is a no-op (Alembic sees it's already at
+head and does nothing further; role count stays at 5, not 10).
 
 Two things specific to Render worth double-checking:
 - **`DATABASE_URL` must use `postgresql+asyncpg://`**, not plain

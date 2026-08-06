@@ -13,6 +13,9 @@
 # separate manual step to remember.
 set -e
 
+echo "Waiting for database to be ready..."
+python wait_for_db.py
+
 echo "Running database migrations..."
 alembic upgrade head
 
