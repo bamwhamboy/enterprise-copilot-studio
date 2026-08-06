@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const quickActions: QuickAction[] = [
-  { id: "new-copilot", label: "Create Copilot", icon: Plus, href: "/create-copilot" },
+  { id: "new-copilot", label: "Create Copilot", icon: Plus, href: "/copilots" },
   { id: "add-source", label: "Add Knowledge Source", icon: Database, href: "/knowledge-sources" },
   { id: "invite", label: "Invite Teammate", icon: UserPlus, href: "/settings" },
   { id: "docs", label: "View Documentation", icon: BookOpen, href: "/help" },
@@ -37,7 +37,7 @@ function getGreeting(hour: number) {
 
 const emptySubscribe = () => () => {};
 
-export function WelcomeBanner() {
+export function WelcomeBanner({ userName }: { userName: string }) {
   // Server snapshot stays neutral (no Date access); client snapshot resolves
   // the real time-based greeting once hydrated. Avoids setState-in-effect
   // and any server/client mismatch.
@@ -65,7 +65,7 @@ export function WelcomeBanner() {
             Enterprise Copilot Studio
           </span>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            {greeting}, Vijay
+            {greeting}, {userName}
           </h1>
           <p className="max-w-md text-sm text-muted-foreground">
             Here&apos;s how your copilot platform is performing today.

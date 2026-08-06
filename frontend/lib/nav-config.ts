@@ -2,7 +2,9 @@ import {
   LayoutDashboard,
   Store,
   Wand2,
+  Bot,
   Database,
+  FileStack,
   Blocks,
   Gauge,
   Wallet,
@@ -18,6 +20,12 @@ import type { NavItem } from "@/types/nav";
  */
 export const primaryNavItems: NavItem[] = [
   { key: "dashboard", label: "Dashboard", href: "/", icon: LayoutDashboard },
+  {
+    key: "copilots",
+    label: "Copilots",
+    href: "/copilots",
+    icon: Bot,
+  },
   {
     key: "marketplace",
     label: "Copilot Marketplace",
@@ -35,6 +43,12 @@ export const primaryNavItems: NavItem[] = [
     label: "Knowledge Sources",
     href: "/knowledge-sources",
     icon: Database,
+  },
+  {
+    key: "documents",
+    label: "Documents",
+    href: "/documents",
+    icon: FileStack,
   },
   {
     key: "ai-components",

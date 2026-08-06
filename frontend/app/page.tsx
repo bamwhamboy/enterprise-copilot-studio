@@ -1,239 +1,198 @@
-import Link from "next/link";
+"use client";
+
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
-  Zap,
-  Wallet,
-  Timer,
-  Router,
-  SearchCode,
-  Boxes,
   Database,
-  Users,
-  Building2,
-  Landmark,
-  Laptop,
-  Coins,
-  Gauge,
   FileStack,
-  ShieldCheck,
-  PiggyBank,
+  MessagesSquare,
+  Users,
+  Landmark,
+  Building2,
+  Laptop,
   Sparkles,
-  Rocket,
-  BookOpenCheck,
-  ArrowUpRight,
+  FilePlus2,
+  FolderPlus,
 } from "lucide-react";
 
-import type {
-  StatCardData,
-  PlatformHealthData,
-  MarketplaceCopilotData,
-  OptimizerMetricData,
-  ActivityItemData,
-} from "@/types/dashboard";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import type { StatCardData, MarketplaceCopilotData, ActivityItemData } from "@/types/dashboard";
+import { useAuthStore } from "@/store/auth-store";
+import { useChatStore } from "@/store/chat-store";
+import { copilotsApi } from "@/lib/api/copilots";
+import { knowledgeSourcesApi } from "@/lib/api/knowledge-sources";
+import { organizationsApi } from "@/lib/api/organizations";
 import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { DashboardSection } from "@/components/dashboard/dashboard-section";
-import { PlatformHealthCard } from "@/components/dashboard/platform-health-card";
+import { LivePlatformHealth } from "@/components/dashboard/live-platform-health";
 import { MarketplaceCopilotCard } from "@/components/dashboard/marketplace-copilot-card";
-import { OptimizerMetricTile } from "@/components/dashboard/optimizer-metric-tile";
 import { ActivityTimeline } from "@/components/dashboard/activity-timeline";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 
-// ---- Mock data -------------------------------------------------------
-// UI foundation only — replace with real queries once the platform API exists.
+const CATEGORY_ICONS: Record<string, typeof Users> = {
+  hr: Users,
+  finance: Landmark,
+  procurement: Building2,
+  it: Laptop,
+};
 
-const kpiCards: StatCardData[] = [
-  {
-    id: "active-copilots",
-    label: "Active Copilots",
-    value: "6",
-    icon: Bot,
-    trendLabel: "+2 this month",
-    trendDirection: "up",
-  },
-  {
-    id: "ai-requests-today",
-    label: "AI Requests Today",
-    value: "12,480",
-    icon: Zap,
-    trendLabel: "+8.4% vs yesterday",
-    trendDirection: "up",
-  },
-  {
-    id: "monthly-cost",
-    label: "Monthly AI Cost",
-    value: "$4,215",
-    icon: Wallet,
-    trendLabel: "-6.1% vs last month",
-    trendDirection: "down",
-  },
-  {
-    id: "avg-response-time",
-    label: "Average Response Time",
-    value: "820ms",
-    icon: Timer,
-    trendLabel: "Within SLA",
-    trendDirection: "flat",
-  },
-];
-
-const platformHealth: PlatformHealthData[] = [
-  {
-    id: "llm-gateway",
-    name: "LLM Gateway",
-    description: "LiteLLM routing layer",
-    status: "healthy",
-    icon: Router,
-    lastUpdated: "Just now",
-  },
-  {
-    id: "retrieval-engine",
-    name: "Retrieval Engine",
-    description: "Hierarchical Hybrid RAG",
-    status: "healthy",
-    icon: SearchCode,
-    lastUpdated: "Just now",
-  },
-  {
-    id: "vector-db",
-    name: "Vector Database",
-    description: "Qdrant cluster",
-    status: "degraded",
-    icon: Boxes,
-    lastUpdated: "2 min ago",
-  },
-  {
-    id: "redis",
-    name: "Redis",
-    description: "Semantic + session cache",
-    status: "healthy",
-    icon: Zap,
-    lastUpdated: "1 min ago",
-  },
-  {
-    id: "postgresql",
-    name: "PostgreSQL",
-    description: "Primary application database",
-    status: "healthy",
-    icon: Database,
-    lastUpdated: "Just now",
-  },
-];
-
-const marketplaceCopilots: MarketplaceCopilotData[] = [
-  {
-    id: "hr-copilot",
-    name: "HR Copilot",
-    description: "Policies, leave, and onboarding assistant.",
-    category: "Human Resources",
-    icon: Users,
-    status: "available",
-    // No dedicated HR Copilot page exists yet — route into the wizard that creates/configures it.
-    href: "/create-copilot",
-  },
-  {
-    id: "finance-copilot",
-    name: "Finance Copilot",
-    description: "Expense, budget, and reporting assistant.",
-    category: "Finance",
-    icon: Landmark,
-    status: "coming-soon",
-    href: "/marketplace",
-  },
-  {
-    id: "procurement-copilot",
-    name: "Procurement Copilot",
-    description: "Vendor, contract, and sourcing assistant.",
-    category: "Procurement",
-    icon: Building2,
-    status: "coming-soon",
-    href: "/marketplace",
-  },
-  {
-    id: "it-copilot",
-    name: "IT Copilot",
-    description: "Access requests and troubleshooting assistant.",
-    category: "IT",
-    icon: Laptop,
-    status: "coming-soon",
-    href: "/marketplace",
-  },
-];
-
-const optimizerMetrics: OptimizerMetricData[] = [
-  {
-    id: "token-savings",
-    label: "Token Savings",
-    value: "34%",
-    progress: 34,
-    icon: Coins,
-    description: "Reduced via prompt and context optimization.",
-  },
-  {
-    id: "cache-hit-ratio",
-    label: "Cache Hit Ratio",
-    value: "61%",
-    progress: 61,
-    icon: Gauge,
-    description: "Requests served from the semantic cache.",
-  },
-  {
-    id: "context-compression",
-    label: "Context Compression",
-    value: "42%",
-    progress: 42,
-    icon: FileStack,
-    description: "Average reduction in retrieved context size.",
-  },
-  {
-    id: "prompt-sanitization",
-    label: "Prompt Sanitization",
-    value: "128 blocked",
-    icon: ShieldCheck,
-    description: "Unsafe or injected prompts blocked this month.",
-  },
-];
-
-const activityItems: ActivityItemData[] = [
-  {
-    id: "a1",
-    title: "HR Copilot v1.3 generated",
-    description: "Composed from 4 AI components and 2 knowledge sources.",
-    timestamp: "10 min ago",
-    icon: Sparkles,
-    status: "success",
-  },
-  {
-    id: "a2",
-    title: "Finance Copilot draft created",
-    description: "Template scaffolded, pending knowledge source setup.",
-    timestamp: "1 hr ago",
-    icon: Rocket,
-    status: "info",
-  },
-  {
-    id: "a3",
-    title: "Knowledge source re-indexed",
-    description: "Policies_2026.pdf embedded and added to the retrieval index.",
-    timestamp: "3 hr ago",
-    icon: BookOpenCheck,
-    status: "info",
-  },
-  {
-    id: "a4",
-    title: "Cost threshold notice",
-    description: "IT Copilot sandbox crossed 80% of its monthly budget.",
-    timestamp: "Yesterday",
-    icon: PiggyBank,
-    status: "warning",
-  },
-];
+function timeAgo(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days !== 1 ? "s" : ""} ago`;
+}
 
 export default function DashboardPage() {
+  const user = useAuthStore((s) => s.user);
+  const chatSessions = useChatStore((s) => s.sessions);
+
+  const { data: copilots, isLoading: copilotsLoading } = useQuery({
+    queryKey: ["copilots"],
+    queryFn: copilotsApi.list,
+  });
+  const { data: sources, isLoading: sourcesLoading } = useQuery({
+    queryKey: ["knowledge-sources"],
+    queryFn: knowledgeSourcesApi.list,
+  });
+  const { data: organizations } = useQuery({
+    queryKey: ["organizations"],
+    queryFn: organizationsApi.list,
+  });
+
+  const organization = organizations?.find((o) => o.id === user?.organization_id) ?? organizations?.[0];
+  const totalDocuments = sources?.reduce((sum, s) => sum + s.documents.length, 0) ?? 0;
+  const activeCopilots = copilots?.filter((c) => c.status === "active").length ?? 0;
+
+  const kpiCards: StatCardData[] = [
+    {
+      id: "active-copilots",
+      label: "Active Copilots",
+      value: copilotsLoading ? "—" : String(activeCopilots),
+      icon: Bot,
+      trendLabel: copilots ? `${copilots.length} total` : undefined,
+      trendDirection: "flat",
+    },
+    {
+      id: "knowledge-sources",
+      label: "Knowledge Sources",
+      value: sourcesLoading ? "—" : String(sources?.length ?? 0),
+      icon: Database,
+      trendDirection: "flat",
+    },
+    {
+      id: "documents",
+      label: "Documents",
+      value: sourcesLoading ? "—" : String(totalDocuments),
+      icon: FileStack,
+      trendDirection: "flat",
+    },
+    {
+      id: "chat-sessions",
+      label: "Chat Sessions",
+      value: String(chatSessions.length),
+      icon: MessagesSquare,
+      trendLabel: "This browser",
+      trendDirection: "flat",
+    },
+  ];
+
+  const marketplaceCopilots: MarketplaceCopilotData[] = useMemo(() => {
+    if (!copilots || copilots.length === 0) return [];
+    return copilots.slice(0, 4).map((copilot) => ({
+      id: copilot.id,
+      name: copilot.name,
+      description: copilot.description || `${copilot.domain.toUpperCase()} copilot`,
+      category: copilot.domain,
+      icon: CATEGORY_ICONS[copilot.domain] ?? Bot,
+      status: copilot.status === "active" ? "available" : "coming-soon",
+      href: copilot.status === "active" ? `/copilots/${copilot.id}/chat` : "/copilots",
+    }));
+  }, [copilots]);
+
+  const activityItems: ActivityItemData[] = useMemo(() => {
+    const events: (ActivityItemData & { sortKey: string })[] = [];
+    copilots?.forEach((c) => {
+      events.push({
+        id: `copilot-${c.id}`,
+        title: `Copilot "${c.name}" created`,
+        description: `${c.domain.toUpperCase()} domain · ${c.knowledge_sources.length} knowledge source${c.knowledge_sources.length !== 1 ? "s" : ""} linked.`,
+        timestamp: timeAgo(c.created_at),
+        icon: Sparkles,
+        status: "success",
+        sortKey: c.created_at,
+      });
+    });
+    sources?.forEach((s) => {
+      events.push({
+        id: `source-${s.id}`,
+        title: `Knowledge source "${s.name}" created`,
+        description: `${s.documents.length} document${s.documents.length !== 1 ? "s" : ""} in this source.`,
+        timestamp: timeAgo(s.created_at),
+        icon: FolderPlus,
+        status: "info",
+        sortKey: s.created_at,
+      });
+      s.documents.forEach((d) => {
+        events.push({
+          id: `doc-${d.id}`,
+          title: `Document "${d.original_filename || d.name}" uploaded`,
+          description: `${d.pages} page${d.pages !== 1 ? "s" : ""} · ${d.index_status === "INDEXED" ? "indexed" : "not yet indexed"}.`,
+          timestamp: timeAgo(d.created_at),
+          icon: FilePlus2,
+          status: d.index_status === "INDEXED" ? "success" : "info",
+          sortKey: d.created_at,
+        });
+      });
+    });
+    return events
+      .sort((a, b) => new Date(b.sortKey).getTime() - new Date(a.sortKey).getTime())
+      .slice(0, 6);
+  }, [copilots, sources]);
+
   return (
     <div className="flex flex-col gap-8">
-      <WelcomeBanner />
+      <WelcomeBanner userName={user?.full_name || user?.email?.split("@")[0] || "there"} />
+
+      {organization && user && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Card>
+            <CardContent className="flex items-center justify-between pt-6">
+              <div>
+                <p className="text-xs text-muted-foreground">Organization</p>
+                <p className="text-sm font-semibold text-foreground">{organization.name}</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center justify-between pt-6">
+              <div>
+                <p className="text-xs text-muted-foreground">Current User</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {user.full_name || user.email}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center justify-between pt-6">
+              <div>
+                <p className="text-xs text-muted-foreground">Role</p>
+                <Badge variant="secondary" className="mt-1 capitalize">
+                  {user.role.name.replace(/_/g, " ")}
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <DashboardSection title="Key Metrics" description="Live snapshot across your copilot platform.">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -243,80 +202,53 @@ export default function DashboardPage() {
         </div>
       </DashboardSection>
 
-      <DashboardSection
-        title="Platform Health"
-        description="Core infrastructure services powering every copilot."
-      >
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          {platformHealth.map((service) => (
-            <PlatformHealthCard key={service.id} data={service} />
-          ))}
+      <DashboardSection title="Platform Health" description="Live status of the backend API.">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <LivePlatformHealth />
         </div>
       </DashboardSection>
 
       <div className="grid grid-cols-1 gap-8 xl:grid-cols-3">
         <div className="flex flex-col gap-8 xl:col-span-2">
           <DashboardSection
-            title="Copilot Marketplace"
-            description="Ready-made templates for every business function."
-            action={
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/marketplace">
-                  Browse all
-                  <ArrowUpRight className="size-3.5" />
-                </Link>
-              </Button>
-            }
+            title="Your Copilots"
+            description="Jump back into a recently created copilot."
           >
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {marketplaceCopilots.map((copilot) => (
-                <MarketplaceCopilotCard key={copilot.id} data={copilot} />
-              ))}
-            </div>
-          </DashboardSection>
-
-          <DashboardSection
-            title="AI Optimizer"
-            description="Cost and performance gains from the optimization layer."
-          >
-            <Card className="overflow-hidden">
-              <CardContent className="flex flex-col gap-6 pt-6">
-                <div className="flex flex-col gap-1 rounded-xl bg-gradient-to-br from-primary/10 to-[#5b7cfa]/10 p-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-                      <PiggyBank className="size-5" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">
-                        Estimated Monthly Savings
-                      </p>
-                      <p className="text-2xl font-semibold tracking-tight text-foreground">
-                        $1,860
-                      </p>
-                    </div>
-                  </div>
-                  <span className="w-fit rounded-full bg-success/15 px-2.5 py-1 text-xs font-medium text-success">
-                    30% below unoptimized baseline
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {optimizerMetrics.map((metric) => (
-                    <OptimizerMetricTile key={metric.id} data={metric} />
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            {copilotsLoading ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {[0, 1].map((i) => (
+                  <Skeleton key={i} className="h-40 w-full rounded-xl" />
+                ))}
+              </div>
+            ) : marketplaceCopilots.length > 0 ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {marketplaceCopilots.map((copilot) => (
+                  <MarketplaceCopilotCard key={copilot.id} data={copilot} />
+                ))}
+              </div>
+            ) : (
+              <Card>
+                <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
+                  <p className="text-sm font-medium text-foreground">No copilots yet</p>
+                  <p className="text-xs text-muted-foreground">
+                    Create your first copilot to see it here.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </DashboardSection>
         </div>
 
-        <DashboardSection
-          title="Recent Activity"
-          description="Latest copilot generation events."
-        >
+        <DashboardSection title="Recent Activity" description="Latest changes across your workspace.">
           <Card>
             <CardContent className="pt-6">
-              <ActivityTimeline items={activityItems} />
+              {activityItems.length > 0 ? (
+                <ActivityTimeline items={activityItems} />
+              ) : (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  Activity will appear here once you create copilots and knowledge sources.
+                </p>
+              )}
             </CardContent>
           </Card>
         </DashboardSection>
