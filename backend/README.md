@@ -609,6 +609,15 @@ of scope for this sprint).
 
 ### How to Test
 
+**Via the frontend (Sprint 9 and later)**: the frontend now has a real
+Sign Up page at `/register` that calls this exact endpoint — the
+Swagger walkthrough below remains accurate and useful for testing the
+backend in isolation, but end users (and most manual testing) should
+go through the UI, not Swagger directly. The frontend supplies a
+private, auto-generated `organization_name` per user (never derived
+from email domain, never exposed as a visible field) — see the
+frontend's `lib/workspace-name.ts` and its README for the exact scheme.
+
 **1. Docker + migration:**
 ```bash
 cd backend

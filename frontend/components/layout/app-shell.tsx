@@ -17,7 +17,7 @@ interface AppShellProps {
 
 // Routes that render full-screen, without the authenticated app chrome
 // (sidebar/top bar) and without the AuthGuard redirect.
-const UNAUTHENTICATED_ROUTES = ["/login"];
+const UNAUTHENTICATED_ROUTES = ["/login", "/register"];
 
 /**
  * Reusable shell used by every authenticated route: fixed sidebar,

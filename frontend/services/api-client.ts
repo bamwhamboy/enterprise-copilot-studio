@@ -48,12 +48,37 @@ async function refreshAccessToken(): Promise<string | null> {
   return refreshPromise;
 }
 
+interface PydanticValidationIssue {
+  loc?: (string | number)[];
+  msg?: string;
+}
+
 async function parseErrorBody(res: Response): Promise<{ message: string; detail?: unknown }> {
   try {
     const body = await res.json();
-    const message =
-      typeof body?.detail === "string" ? body.detail : res.statusText || "Request failed";
-    return { message, detail: body };
+
+    if (typeof body?.detail === "string") {
+      return { message: body.detail, detail: body };
+    }
+
+    // FastAPI/Pydantic validation errors (422) come back as an array of
+    // issues, not a string -- e.g. [{ loc: ["body", "password"], msg:
+    // "String should have at least 8 characters" }]. Surface the first
+    // one plainly rather than falling back to a generic
+    // "Unprocessable Entity".
+    if (Array.isArray(body?.detail) && body.detail.length > 0) {
+      const issue = body.detail[0] as PydanticValidationIssue;
+      const field = issue.loc?.[issue.loc.length - 1];
+      const message =
+        typeof issue.msg === "string"
+          ? typeof field === "string"
+            ? `${field}: ${issue.msg}`
+            : issue.msg
+          : res.statusText || "Request failed";
+      return { message, detail: body };
+    }
+
+    return { message: res.statusText || "Request failed", detail: body };
   } catch {
     return { message: res.statusText || "Request failed" };
   }
