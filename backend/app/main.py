@@ -25,6 +25,7 @@ from app.database.session import dispose_engine
 from app.guardrails.guardrails_runtime import GuardrailViolationError
 from app.knowledge_engine.indexing.indexing_service import DocumentNotReadyError
 from app.middleware.request_context import RequestContextMiddleware
+from app.services.auth_service import AuthenticationError
 
 logger = get_logger(__name__)
 
@@ -119,6 +120,16 @@ def create_app() -> FastAPI:
                 "stage": exc.stage,
                 "issues": [issue.message for issue in exc.result.issues],
             },
+        )
+
+    @app.exception_handler(AuthenticationError)
+    async def authentication_error_handler(
+        request: Request, exc: AuthenticationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": str(exc)},
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     app.include_router(api_router)

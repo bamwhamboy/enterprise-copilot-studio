@@ -79,3 +79,8 @@ sentence-transformers==3.0.1
 # unified call interface, config-driven provider/model selection.
 langgraph==1.2.10
 litellm==1.95.0
+
+# --- Sprint 6: Authentication & Authorization -----------------------------
+pyjwt==2.10.1
+bcrypt==4.2.1
+email-validator==2.3.0

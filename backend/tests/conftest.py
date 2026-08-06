@@ -21,7 +21,7 @@ from qdrant_client import QdrantClient
 
 from app.core.dependencies import get_embed_model, get_qdrant_client
 from app.database.base import Base
-from app.database.session import engine
+from app.database.session import AsyncSessionLocal, engine
 from app.main import app
 from app.models import Copilot, Document, KnowledgeSource  # noqa: F401  (populates Base.metadata)
 
@@ -43,6 +43,18 @@ async def setup_database():
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
+    # Seed the five RBAC roles. In a real deployment these come from the
+    # Sprint 6 Alembic migration's data-seeding step (see
+    # alembic/versions/..._add_auth_rbac_and_multi_tenancy_tables.py) --
+    # but the test suite builds its schema via Base.metadata.create_all()
+    # (fast, no migration history needed), which only creates tables, not
+    # migration-embedded seed data. Seed it here instead, once per session.
+    from app.models.role import ALL_ROLES, Role
+
+    async with AsyncSessionLocal() as session:
+        session.add_all([Role(name=name) for name in ALL_ROLES])
+        await session.commit()
+
     # Drop pooled connections opened during setup — they belong to this
     # fixture's event loop, which differs from the first test's loop.
     await engine.dispose()
@@ -61,6 +73,35 @@ async def client() -> AsyncClient:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+def register_and_login(client: AsyncClient):
+    """Factory fixture: register (or reuse) a user and return their TokenResponse dict.
+
+    Usage: ``tokens = await register_and_login(email="a@b.com")`` then
+    ``headers = {"Authorization": f"Bearer {tokens['access_token']}"}``.
+    Shared here (rather than duplicated per test file) since most test
+    modules now need an authenticated user to exercise protected chat
+    endpoints.
+    """
+
+    async def _factory(
+        *,
+        email: str,
+        organization_name: str = "Test Org",
+        password: str = "TestPass123",
+    ) -> dict:
+        await client.post(
+            "/api/v1/auth/register",
+            json={"email": email, "password": password, "organization_name": organization_name},
+        )
+        response = await client.post(
+            "/api/v1/auth/login", data={"username": email, "password": password}
+        )
+        return response.json()
+
+    return _factory
 
 
 @pytest_asyncio.fixture(autouse=True)

@@ -28,6 +28,8 @@ from app.knowledge_engine.embeddings.embedding_model import build_embedding_mode
 from app.knowledge_engine.indexing.indexing_service import IndexingService
 from app.knowledge_engine.indexing.vector_store import build_qdrant_client, build_vector_store
 from app.knowledge_engine.pipeline.ingestion_pipeline import DocumentIngestionPipeline
+from app.repositories.organization_repository import OrganizationRepository, RoleRepository
+from app.services.auth_service import AuthService
 from app.knowledge_engine.retrieval.hybrid_retriever import HybridRetriever
 from app.knowledge_engine.storage.document_storage import DocumentStorageService
 from app.llm.gateway import LLMGateway
@@ -280,3 +282,29 @@ async def get_chat_orchestrator(
 
 
 ChatOrchestratorServiceDep = Annotated[ChatOrchestratorService, Depends(get_chat_orchestrator)]
+
+
+# --- Sprint 6: Authentication & Authorization DI providers ------------------
+
+
+async def get_auth_service(session: DbSessionDep, settings: SettingsDep) -> AuthService:
+    return AuthService(session, settings)
+
+
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+
+
+async def get_organization_repository(session: DbSessionDep) -> OrganizationRepository:
+    return OrganizationRepository(session)
+
+
+OrganizationRepositoryDep = Annotated[
+    OrganizationRepository, Depends(get_organization_repository)
+]
+
+
+async def get_role_repository(session: DbSessionDep) -> RoleRepository:
+    return RoleRepository(session)
+
+
+RoleRepositoryDep = Annotated[RoleRepository, Depends(get_role_repository)]

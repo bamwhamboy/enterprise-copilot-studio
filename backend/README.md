@@ -17,15 +17,18 @@ FastAPI backend for Enterprise Copilot Studio.
   hierarchical chunking, embeddings, indexing into Qdrant, and hybrid
   (semantic + BM25) retrieval with citation-preserving context
   compression.
-- **Sprint 5 (this update)**: the **Enterprise AI Runtime** — a working
-  conversational engine. LangGraph orchestrates a 5-node workflow
+- **Sprint 5 (chat runtime)**: LangGraph orchestrates a 5-node workflow
   (planner → retrieval → context builder → response generator →
   citation builder); the LLM Gateway is completed with real LiteLLM
-  calls across 5 providers; conversation memory, a guardrails runtime
-  (injection/jailbreak/PII detection + masking), a tool-calling
-  framework, and RAG improvements (query rewriting, re-ranking,
-  confidence scoring) are all wired together behind
-  `POST /api/v1/chat` and `POST /api/v1/chat/stream` (SSE).
+  calls across 5 providers; conversation memory, a guardrails runtime,
+  a tool-calling framework, and RAG improvements are all wired
+  together behind `POST /api/v1/chat` and `POST /api/v1/chat/stream`.
+- **Sprint 6 (this update)**: **Authentication & Authorization** —
+  JWT-based auth (bcrypt password hashing, access/refresh tokens with
+  rotation and revocation), 5-role RBAC seeded via migration,
+  multi-tenancy (Organization scoping), and `/chat` now derives the
+  authenticated user's identity automatically instead of trusting a
+  client-supplied `user_id`.
 
 ## Tech Stack
 
@@ -519,6 +522,154 @@ prompt assembly, guardrail enforcement, and response shaping — the same techni
 other provider's key) in `.env` and the exact same code path runs for real, no changes
 needed.
 
+## Authentication & Authorization (Sprint 6)
+
+Production-grade JWT auth, RBAC, and multi-tenancy — verified end to end
+against a live server and real Postgres, not just unit-tested in isolation.
+
+```
+app/
+├── models/
+│   ├── organization.py     # the tenant boundary
+│   ├── role.py              # 5 roles, seeded via migration (not hardcoded enum)
+│   ├── user.py               # scoped to one Organization + one Role
+│   └── refresh_token.py      # stores only a SHA-256 hash, never the raw token
+├── security/                 # new top-level package
+│   ├── password.py           # bcrypt hash/verify
+│   ├── jwt.py                 # access/refresh token create + decode, type-checked
+│   └── dependencies.py       # get_current_user, get_current_active_user, require_role()
+├── repositories/
+│   ├── user_repository.py
+│   ├── organization_repository.py  # + RoleRepository, combined (both simple lookups)
+│   └── refresh_token_repository.py # hash lookup, validity check, revoke
+├── services/
+│   └── auth_service.py       # register / login / refresh (rotation) / logout
+├── schemas/auth.py
+└── api/v1/
+    ├── auth.py                # POST register, login, refresh, logout
+    ├── users.py                # GET /users/me
+    ├── organizations.py        # GET /organizations (scoped by role)
+    └── roles.py                 # GET /roles
+```
+
+**Minimally touched, not regenerated**: `Copilot`/`KnowledgeSource` gained
+one nullable `organization_id` column each (schema-ready for tenant
+scoping); `ChatRequest.user_id` became optional (client no longer needs
+to send it); `api/v1/chat.py` now requires authentication and overwrites
+`payload.user_id` with the authenticated identity before it ever reaches
+`ChatOrchestratorService` — **zero changes** to the orchestrator, the
+LangGraph workflow, or any agent node. `core/dependencies.py` and
+`api/router.py` gained new providers/mounts, additively.
+
+### A deliberate scope decision
+
+**The existing Copilot/KnowledgeSource/Document CRUD endpoints
+(`/copilots`, `/knowledge-sources`, `/documents`) were *not* retrofitted
+with mandatory authentication or tenant-scoped filtering in this sprint.**
+Doing so would have meant rewriting several already-tested Sprint 2 files
+and their full test suites — directly at odds with this sprint's own
+"minimize modified files" and "preserve all existing functionality"
+constraints, and a much larger, higher-risk change than the sprint's
+primary ask. What *is* in place: the `organization_id` columns exist and
+are ready, and chat — the one place explicitly required to change
+authentication behavior — is fully protected and tenant-aware via the
+authenticated user's `organization_id`. Recommend a follow-up sprint to
+wire `Depends(CurrentUser)` + org-scoped filtering into those three
+routers once this tradeoff is confirmed acceptable.
+
+### Two real bugs found while building this (not just written and assumed correct)
+
+1. **Role-seeding gap in tests**: the Sprint 6 migration seeds the 5 roles
+   via a data-insertion step (`op.bulk_insert`) — but the test suite builds
+   its schema via `Base.metadata.create_all()` for speed, which only
+   creates tables, never runs migration-embedded data. Registration failed
+   with `AttributeError: 'NoneType' object has no attribute 'id'` in every
+   test until roles were seeded directly in `conftest.py`'s
+   `setup_database` fixture too.
+2. **`BaseRepository.list_all()`'s `created_at` assumption broke on `Role`**:
+   the base repository (Sprint 2) orders every list query by
+   `created_at.desc()`, documented as relying on "all current models expose
+   `created_at`" — which stopped being true the moment a genuinely
+   timestamp-free reference table (`Role`) was added. Fixed with a minimal
+   override in `RoleRepository.list_all()`.
+3. **An empty `.env.example` value is worse than an absent one**: initially
+   wrote `JWT_SECRET_KEY=` (empty) in `.env.example`. Verified directly that
+   pydantic-settings treats a present-but-empty env var as `""`, silently
+   overriding the safe code-level dev default — the opposite of what an
+   `.env.example` placeholder should do. Fixed by commenting the line out
+   instead.
+
+### Registration / role assignment rule
+
+`POST /auth/register` takes an `organization_name`. If an organization
+with that name already exists, the new user joins it as `end_user`; if
+not, one is created and the registering user becomes its
+`organization_admin`. Simple, self-service, no separate invite flow (out
+of scope for this sprint).
+
+### How to Test
+
+**1. Docker + migration:**
+```bash
+cd backend
+docker compose up --build
+docker compose exec api alembic upgrade head    # seeds the 5 roles
+```
+
+**2. Swagger sequence** at `http://localhost:8000/docs`:
+1. `POST /api/v1/auth/register` — `{"email": "admin@acme.com", "password": "SecurePass123", "organization_name": "Acme Corp"}`
+2. Click the **Authorize** button (top right) — enter the same email as
+   username and your password. This POSTs to `/api/v1/auth/login` under
+   the hood (OAuth2PasswordRequestForm, exactly what makes Swagger's
+   Bearer auth work natively) and Swagger stores the access token for
+   every subsequent request.
+3. `GET /api/v1/users/me` — confirms you're authenticated as `organization_admin`.
+4. `GET /api/v1/roles` — lists all 5 seeded roles.
+5. `POST /api/v1/chat` — no `user_id` field needed; try it with a real
+   `copilot_id` from the existing Copilot Management endpoints. Try it
+   again with **no** Authorization header — confirms `401`.
+6. `POST /api/v1/auth/refresh` with the refresh token from step 1's login
+   response — confirms token rotation.
+7. `POST /api/v1/auth/logout` with that same (now-rotated, current)
+   refresh token, then try `/auth/refresh` again with it — confirms `401`
+   (revoked).
+
+**Sample register request/response:**
+```json
+POST /api/v1/auth/register
+{ "email": "admin@acme.com", "password": "SecurePass123", "organization_name": "Acme Corp" }
+```
+```json
+{
+  "id": "4bc322b6-46d0-4118-8987-35d6c8aea8a8",
+  "email": "admin@acme.com",
+  "full_name": null,
+  "is_active": true,
+  "organization_id": "fb8ca471-1d44-498c-829e-a15b7beeb56e",
+  "role": { "id": "37c835b4-...", "name": "organization_admin", "description": "Full access within their own organization." },
+  "created_at": "2026-08-05T15:45:55.334376Z"
+}
+```
+
+**3. Automated tests:**
+```bash
+cd backend
+pip install -r requirements.txt
+pytest tests/test_auth.py tests/test_chat.py -v
+```
+`test_auth.py` (15 tests) covers registration/role-assignment, login,
+protected-endpoint 401s, refresh rotation + replay rejection, logout +
+revocation. `test_chat.py` was updated (not regenerated) to add auth
+headers to every existing call, plus 3 new tests: unauthenticated chat
+→ 401, unauthenticated stream → 401, and — the key guarantee — that a
+client-supplied `user_id` in the payload is silently ignored in favor of
+the authenticated identity.
+
+Every scenario above was also run manually against a live `uvicorn`
+server and real Postgres before being formalized into tests — including
+confirming a rotated refresh token becomes genuinely unusable and a
+logged-out token can't be replayed.
+
 ## How to Run
 
 ### Option A — Docker Compose (recommended)
@@ -688,12 +839,26 @@ Also bumped in Sprint 5 (necessary, not optional — see `requirements.txt` comm
 ABI fix from Sprint 3B still holds with the new versions before shipping (full 65-test
 regression suite, clean, before any Sprint 5 code was written).
 
+**Sprint 6:**
+
+| Package | Why |
+|---|---|
+| `pyjwt` | JWT access/refresh token creation and verification |
+| `bcrypt` | Password hashing (used directly, not via passlib) |
+| `email-validator` | Backs Pydantic's `EmailStr`, used for `UserRegister.email` |
+
 ## What's Intentionally Not Here
 
 Per Sprint 5's explicit scope: the Sprint 3B retrieval implementation was not replaced (only
 extended with query rewriting/re-ranking/confidence scoring as additive post-processing
-steps). No authentication beyond the existing `user_id` string field — real auth/session
-tokens are future work the design deliberately doesn't need major refactoring to add. No
-real LLM provider was called end-to-end in this environment (no API key available) — every
-integration test monkeypatches `litellm.acompletion`; see the Enterprise AI Runtime section
-above for what that does and doesn't prove.
+steps). No real LLM provider was called end-to-end in this environment (no API key
+available) — every integration test monkeypatches `litellm.acompletion`; see the Enterprise
+AI Runtime section above for what that does and doesn't prove.
+
+Per Sprint 6's explicit scope: the existing Copilot/KnowledgeSource/Document CRUD endpoints
+were not retrofitted with mandatory authentication or tenant-scoped filtering — see "A
+deliberate scope decision" under Authentication & Authorization above. No invite-based
+registration flow (self-service org-join-by-name only). No password reset flow. No
+super_admin bootstrap tooling (a super_admin user must currently be promoted directly in the
+database — `UPDATE users SET role_id = (SELECT id FROM roles WHERE name = 'super_admin')
+WHERE email = '...'`).

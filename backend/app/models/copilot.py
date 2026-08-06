@@ -41,6 +41,14 @@ class Copilot(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    # Sprint 6 multi-tenancy: nullable for backward compatibility with rows
+    # created before Sprint 6 (and the still-open, unauthenticated-in-tests
+    # JSON creation path). NULL means "unscoped" -- invisible to normal
+    # tenant-scoped queries, visible only to super_admin. See
+    # app/services/copilot_service.py for the scoping logic.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     domain: Mapped[str] = mapped_column(String(100), nullable=False, default="hr")

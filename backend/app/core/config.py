@@ -119,6 +119,17 @@ class Settings(BaseSettings):
     RAG_QUERY_REWRITE_ENABLED: bool = True
     RAG_RERANK_ENABLED: bool = True
 
+    # --- Authentication & Authorization (Sprint 6) ---------------------------
+    # No default for the signing secret in any real environment -- .env.example
+    # documents this and README instructions say to generate a real one.
+    # Falls back to a fixed dev-only value ONLY so the app/tests can boot
+    # without every contributor generating a secret first; never use this
+    # value outside local development.
+    JWT_SECRET_KEY: str = "dev-only-insecure-secret-change-me"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+
 
 @lru_cache
 def get_settings() -> Settings:

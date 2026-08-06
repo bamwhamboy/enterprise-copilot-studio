@@ -8,7 +8,7 @@ back one or more copilots.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,13 @@ class KnowledgeSource(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # Sprint 6 multi-tenancy: same nullable/backward-compatible pattern as
+    # Copilot.organization_id -- see app/models/copilot.py for rationale.
+    # Documents are scoped transitively through their KnowledgeSource,
+    # rather than duplicating organization_id onto the Document table.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     # "documents" | "database" | "website" | "connector"
