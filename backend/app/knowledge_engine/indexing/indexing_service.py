@@ -8,6 +8,7 @@ chunk in Qdrant -> update the Document row's chunk/embedding counts and
 
 from __future__ import annotations
 
+import gc
 import uuid
 from pathlib import Path
 from typing import Any
@@ -93,7 +94,21 @@ class IndexingService:
                 logger.exception("Document %s failed during chunking", document_id)
                 raise
 
+            # The raw extracted text and the HierarchicalChunk objects are
+            # both fully redundant the moment TextNodes are built from them
+            # (each TextNode holds its own copy of the same chunk text) --
+            # for hierarchical chunking specifically, the total text volume
+            # across all chunks combined can be several times the original
+            # document's length, since the same content is deliberately
+            # duplicated at each granularity level (Document/Section/
+            # Paragraph). Capturing the count and releasing both before the
+            # memory-intensive embedding step below, rather than leaving
+            # them for Python's own GC timing, matters on a tight memory
+            # budget.
+            chunk_count = len(chunks)
             nodes = [_chunk_to_node(chunk) for chunk in chunks]
+            del text, chunks
+            gc.collect()
 
             try:
                 storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
@@ -123,10 +138,10 @@ class IndexingService:
             await self.session.commit()
             raise
 
-        document.chunks = len(chunks)
-        document.embeddings = len(chunks)
+        document.chunks = chunk_count
+        document.embeddings = chunk_count
         document.index_status = "INDEXED"
         await self.session.commit()
-        logger.info("Document %s -> INDEXED (%d chunks)", document_id, len(chunks))
+        logger.info("Document %s -> INDEXED (%d chunks)", document_id, chunk_count)
 
-        return {"document_id": str(document_id), "chunks_indexed": len(chunks)}
+        return {"document_id": str(document_id), "chunks_indexed": chunk_count}

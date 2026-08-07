@@ -404,6 +404,105 @@ reduced precision" — it's "slightly reduced precision that actually
 runs vs. full precision that gets killed by the OS and indexes nothing
 at all."
 
+## Second OOM: Post-Chunking Crash + Final 512MB Verdict
+
+After the fix above, indexing progressed further — through model
+loading, into chunking — but still crashed with a bare `exit 137`
+(SIGKILL) immediately after "Chunked document into N hierarchical
+nodes," no traceback. Investigated end-to-end; found two distinct,
+evidence-based causes (not one), both fixed:
+
+**1. `litellm` + `langgraph`, 200MB measured, loaded for every request
+regardless of whether it touches chat.** Traced the import chain:
+`app/api/router.py` imports every route module unconditionally
+(including `chat.py`) to register all routes at startup, and
+`app/core/dependencies.py` imported `app.llm.gateway` /
+`app.llm.providers` / `app.workflows.chat_workflow` at module level —
+so a pure indexing request, which never touches chat, was still paying
+for all of it. Measured directly: `import litellm` costs 145MB RSS,
+`from langgraph.graph import ... ` costs another 55MB.
+
+**Fix**: made both lazy, deferred until `get_llm_gateway()` /
+`get_chat_workflow()` actually execute (i.e., only when a real chat
+request resolves that dependency chain). Verified three ways: importing
+the *entire* router confirms `litellm`/`langgraph` are absent from
+`sys.modules`; calling `get_llm_gateway()` directly confirms it still
+correctly imports and constructs everything when actually invoked; the
+full test suite (123 tests, including all 13 chat tests) passes
+unchanged. One real snag hit and fixed along the way: `Annotated[
+LLMGateway, ...]` at module level needs `LLMGateway` as an actual
+resolved class, which would have reintroduced the very import being
+avoided — resolved using the same `Annotated[object, ...]` pattern this
+codebase already used for `ChatWorkflowDep`.
+
+**2. ONNX Runtime's default memory behavior.** Traced fastembed's own
+model-loading source (`fastembed.common.onnx_model.OnnxModel.
+_load_onnx_model`) and confirmed two real, tunable defaults:
+`threads=None` (auto-detects thread count from the host's visible CPU
+count, which can over-provision on a cgroup-limited container) and the
+memory arena allocator (`enable_cpu_mem_arena`/`enable_mem_pattern`,
+both `True` by default — a well-documented ONNX Runtime behavior where
+allocated memory is held for reuse across calls rather than released,
+the right tradeoff for high-throughput serving and the wrong one for an
+occasional indexing request on a tight budget). Set `threads=1`,
+disabled both, and reduced `embed_batch_size` from the framework
+default of 10 down to 4 (hierarchical chunks run up to 2048 tokens
+each, so a batch of 10 could mean ~20K tokens in one inference call).
+Verified these are genuinely accepted parameters (not silently ignored)
+by inspecting the actual call chain and confirming construction
+proceeds past validation to the network-dependent download step.
+
+Also: `IndexingService.index_document()` now explicitly releases the
+raw extracted text and the pre-embedding chunk objects (both fully
+redundant once `TextNode`s are built — hierarchical chunking
+deliberately duplicates the same content across 3 granularity levels,
+so total chunk text volume can be several times the source document's
+length) and runs `gc.collect()` immediately before the memory-intensive
+embedding step, rather than leaving reclaimable memory to Python's own
+GC timing.
+
+### Final verdict: can this run on Render Free (512MB)?
+
+**Yes, for documents in the range that actually crashed (the reported
+27-chunk case) — with real, if not enormous, margin.** The accounting:
+
+- **Measured directly**: importing the full dependency-injection layer
+  (FastAPI, SQLAlchemy, qdrant-client, llama-index-core, PyMuPDF, and
+  the `FastEmbedEmbedding` class itself) with `litellm`/`langgraph`
+  confirmed absent costs **205MB RSS**.
+- **Estimated, not measured** (blocked by this sandbox's `huggingface.co`
+  network restriction, same limitation noted in the section above): the
+  actual model load (67MB quantized weights + ONNX Runtime session) adds
+  roughly 100–200MB; embedding a batch of ~4 chunks at a time adds
+  roughly 20–50MB of transient working memory.
+- **Total estimated peak: ~325–455MB** — comfortably under 512MB.
+
+Before this fix, the same accounting with the 200MB `litellm`/`langgraph`
+tax included lands at **~525–655MB** — consistent with, and a plausible
+full explanation for, the SIGKILL that was actually observed. That
+before/after story is the strongest evidence available that this fix
+addresses the real cause, not a guess dressed up as one.
+
+**Where real risk remains**: this margin shrinks for larger documents.
+Chunk *count* — and therefore total embedded token volume — scales with
+document size, while the fixed baseline (~205MB) does not. A
+much-larger PDF could still exhaust 512MB even after these fixes; there
+was no way to establish an exact size ceiling without the ability to
+run a real end-to-end load test in this environment.
+
+**If this recurs specifically on larger documents**: the smallest
+infrastructure change is upgrading Render's instance from the Free tier
+to its next paid tier — check Render's current pricing page for the
+exact memory allocation, since specifics change over time and
+shouldn't be asserted here as if verified live. This is a smaller,
+lower-risk change than further code-level workarounds at this point
+(e.g., splitting indexing into a separate worker process, or reducing
+`CHUNK_SIZES` to fewer/smaller hierarchical levels, which would trade
+away retrieval quality to buy back memory headroom) — the two fixes in
+this section already captured the largest, clearly-identifiable
+inefficiencies; what's left is mostly proportional to document size,
+not fixable by further tuning.
+
 ## Enterprise AI Runtime (Sprint 5)
 
 The chat runtime: LangGraph orchestration, a completed (LiteLLM-backed)

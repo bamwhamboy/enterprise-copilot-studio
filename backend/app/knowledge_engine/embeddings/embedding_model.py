@@ -93,7 +93,42 @@ def build_embedding_model(settings: Settings) -> BaseEmbedding:
         # time: moving it fixed a real gap, not a hypothetical one.
         from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
-        model = FastEmbedEmbedding(model_name=settings.EMBEDDING_MODEL_NAME)
+        # ONNX Runtime tuning for a memory-constrained deployment (Render's
+        # 512MB tier), verified by inspecting fastembed's own model-loading
+        # source (fastembed.common.onnx_model.OnnxModel._load_onnx_model):
+        #   - threads=1: without this, onnxruntime auto-detects thread count
+        #     from the host's visible CPU count, which on a container with a
+        #     cgroup CPU limit can be higher than what's actually usable --
+        #     each extra thread carries its own working-memory buffers for
+        #     no real throughput benefit at this scale.
+        #   - enable_cpu_mem_arena / enable_mem_pattern: both True by
+        #     default. This is a well-documented ONNX Runtime behavior: the
+        #     arena allocator grows a memory pool and *holds onto it* for
+        #     reuse across calls rather than releasing it back, which is the
+        #     right tradeoff for high-throughput serving and the wrong one
+        #     for a single occasional indexing request on a tight memory
+        #     budget. Disabling both trades a little latency for
+        #     meaningfully lower, more predictable peak memory.
+        # Confirmed these are accepted, real parameters (not silently
+        # ignored) by inspecting FastEmbedEmbedding.__init__ -> TextEmbedding
+        # -> OnnxModel._load_onnx_model's actual source, and empirically:
+        # constructing with these kwargs proceeds past pydantic validation
+        # to the (network-dependent) model download step, rather than
+        # failing on an unrecognized argument.
+        model = FastEmbedEmbedding(
+            model_name=settings.EMBEDDING_MODEL_NAME,
+            threads=1,
+            extra_session_options={
+                "enable_cpu_mem_arena": False,
+                "enable_mem_pattern": False,
+            },
+            # Smaller than BaseEmbedding's own default (10): hierarchical
+            # chunks can be as large as 2048 tokens (the top level of
+            # CHUNK_SIZES), so a batch of 10 could mean up to ~20K tokens
+            # processed in a single inference call. 4 bounds that per-call
+            # peak while still batching more than one chunk at a time.
+            embed_batch_size=4,
+        )
     except Exception:
         # This is the actual point of failure the original version of
         # this module (before either exception-handling pass) had zero

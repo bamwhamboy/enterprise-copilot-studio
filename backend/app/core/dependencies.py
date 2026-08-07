@@ -6,8 +6,10 @@ consistent and makes it trivial to override providers in tests via
 ``app.dependency_overrides``.
 """
 
+from __future__ import annotations
+
 from collections.abc import AsyncGenerator
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends
 from llama_index.core.base.embeddings.base import BaseEmbedding
@@ -32,8 +34,6 @@ from app.repositories.organization_repository import OrganizationRepository, Rol
 from app.services.auth_service import AuthService
 from app.knowledge_engine.retrieval.hybrid_retriever import HybridRetriever
 from app.knowledge_engine.storage.document_storage import DocumentStorageService
-from app.llm.gateway import LLMGateway
-from app.llm.providers import build_provider_clients
 from app.memory.conversation_memory_service import ConversationMemoryService
 from app.prompt_engine.renderer import PromptRenderer
 from app.repositories.copilot_repository import CopilotRepository
@@ -43,7 +43,22 @@ from app.services.document_service import DocumentService
 from app.services.knowledge_source_service import KnowledgeSourceService
 from app.tool_calling.registry import ToolRegistry
 from app.tool_calling.tools.knowledge_search_tool import KnowledgeSearchTool
-from app.workflows.chat_workflow import build_chat_workflow
+
+# app.llm.gateway / app.llm.providers / app.workflows.chat_workflow are
+# deliberately NOT imported at module level (see get_llm_gateway and
+# get_chat_workflow below, where they're imported lazily instead) --
+# litellm and langgraph, pulled in transitively by those three modules,
+# measured at ~145MB and ~55MB RSS respectively just to import, before
+# any actual work. Since *every* route in this file's module gets
+# imported at application startup (app/api/router.py imports every
+# app/api/v1/* module unconditionally, to register all routes), an
+# eager import here meant every request -- including a pure indexing
+# request that never touches chat -- paid that ~200MB baseline for
+# machinery it never uses. This directly contributed to the indexing
+# pipeline's out-of-memory crashes on Render's 512MB tier. TYPE_CHECKING
+# keeps static type checkers happy without adding a real runtime import.
+if TYPE_CHECKING:
+    from app.llm.gateway import LLMGateway
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -101,12 +116,20 @@ DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 
 async def get_llm_gateway(settings: SettingsDep) -> LLMGateway:
-    """Build an ``LLMGateway`` wired to all four configured provider clients."""
+    """Build an ``LLMGateway`` wired to all four configured provider clients.
+
+    Imports deferred to call time -- see the module-level comment above
+    the TYPE_CHECKING block for why (litellm's own import cost, ~145MB,
+    should only be paid by requests that actually need it).
+    """
+    from app.llm.gateway import LLMGateway
+    from app.llm.providers import build_provider_clients
+
     clients = build_provider_clients(settings)
     return LLMGateway(settings, clients)
 
 
-LLMGatewayDep = Annotated[LLMGateway, Depends(get_llm_gateway)]
+LLMGatewayDep = Annotated[object, Depends(get_llm_gateway)]
 
 
 async def get_prompt_sanitizer() -> PromptSanitizer:
@@ -259,6 +282,12 @@ async def get_chat_workflow(
     gateway: LLMGatewayDep,
     guardrails: GuardrailsRuntimeDep,
 ):
+    """Imports deferred to call time -- see the module-level comment above
+    the TYPE_CHECKING block for why (langgraph's own import cost, ~55MB,
+    should only be paid by requests that actually need it).
+    """
+    from app.workflows.chat_workflow import build_chat_workflow
+
     return build_chat_workflow(settings, retriever, compression, renderer, gateway, guardrails)
 
 

@@ -9,3 +9,7 @@ venv/
 htmlcov/
 *.log
 .DS_Store
+
+# Uploaded documents and extracted text — never committed.
+storage/documents/*
+!storage/documents/.gitkeep
