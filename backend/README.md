@@ -918,39 +918,33 @@ without restarting the container:
 docker compose exec api alembic upgrade head
 ```
 
-### Deploying to Render
+### Deploying PostgreSQL on Render
 
-The most common cause of a fresh Render deployment failing with
-`asyncpg.exceptions.UndefinedTableError: relation "users" does not
-exist` is simply that `alembic upgrade head` was never run against the
-Render database — there's no `docker compose exec`-equivalent
-available for a deployed service, so a manual migration step (as used
-locally, above) is easy to miss entirely on a first deploy.
+Per the current architecture, **only the database lives on Render now**
+— the API itself deploys to Railway (below). Render remains a
+perfectly good place to host just a managed PostgreSQL instance; this
+section is about that piece specifically.
 
-This is now handled automatically: `docker-entrypoint.sh` first waits
-for the database to accept connections (`wait_for_db.py` — retries
-every 2 seconds, up to 30 attempts / 60 seconds, since Render's
-Postgres isn't guaranteed to be immediately reachable the instant this
-container starts, particularly on the database's very first boot),
-then runs `alembic upgrade head` before starting the server, on
-**every** container start, including on Render. `alembic upgrade head`
-is idempotent — verified directly by running it twice in a row against
-the same database: the first run applies all 5 migrations and seeds
-the 5 RBAC roles, the second is a no-op (Alembic sees it's already at
-head and does nothing further; role count stays at 5, not 10).
+The most common cause of `asyncpg.exceptions.UndefinedTableError:
+relation "users" does not exist` against a fresh database is simply
+that `alembic upgrade head` was never run against it. This is handled
+automatically regardless of where the API container runs:
+`docker-entrypoint.sh` first waits for the database to accept
+connections (`wait_for_db.py` — retries every 2 seconds, up to 30
+attempts / 60 seconds, since a database isn't guaranteed to be
+immediately reachable the instant a fresh container starts), then runs
+`alembic upgrade head` before starting the server, on **every**
+container start. `alembic upgrade head` is idempotent — verified
+directly by running it twice in a row against the same database: the
+first run applies all 5 migrations and seeds the 5 RBAC roles, the
+second is a no-op.
 
-Two things specific to Render worth double-checking:
-- **`DATABASE_URL` must use `postgresql+asyncpg://`**, not plain
-  `postgresql://`. Render's own auto-generated connection string for
-  an attached PostgreSQL instance is typically the latter — this
-  project's async SQLAlchemy setup requires the `+asyncpg` driver
-  suffix explicitly.
-- Render provides the port your service must listen on via a `$PORT`
-  environment variable, which isn't necessarily `8000`. The entrypoint
-  script already respects this (`${PORT:-8000}`), so no action is
-  needed here — just don't override the container's start command with
-  a hardcoded `--port 8000` in Render's dashboard, or this gets
-  bypassed.
+One thing worth double-checking regardless of which platform the API
+runs on: **`DATABASE_URL` must use `postgresql+asyncpg://`**, not
+plain `postgresql://`. Render's own auto-generated connection string
+for an attached PostgreSQL instance is typically the latter — this
+project's async SQLAlchemy setup requires the `+asyncpg` driver suffix
+explicitly.
 
 If you ever need to run a migration manually against the Render
 database from your own machine (e.g. to debug), point `DATABASE_URL`
@@ -958,14 +952,105 @@ at Render's connection string locally and run `alembic upgrade head`
 directly — no Docker required for this, since `alembic/env.py` reads
 the URL from the same `Settings` object the app itself uses.
 
+**Steps**: in the Render dashboard, create a new **PostgreSQL**
+instance (not a Web Service — no need to deploy this repo's code to
+Render at all anymore). Once provisioned, copy its **External
+Connection String** (not the internal one — Railway isn't on Render's
+private network) from the database's "Connect" panel, and adapt its
+scheme from `postgresql://` to `postgresql+asyncpg://` before using it
+as `DATABASE_URL` on Railway.
+
+### Deploying the API to Railway
+
+**Why this move happened**: after multiple evidence-based optimization
+passes on Render's Free instance tier (512MB) — removing PyTorch
+entirely (300–500MB), removing an eagerly-imported `litellm`/`langgraph`
+baseline (200MB, measured), and fixing an event-loop-blocking bug that
+could independently trigger platform health-check restarts — indexing
+still exited 137. Three substantive, verified fixes is a reasonable
+point to trust the platform's own memory ceiling over further
+speculative code changes; see "Cumulative Final Verdict" above for the
+full investigation this conclusion is based on. Nothing about that
+investigation was Render-specific in a way that would recur on a
+higher-memory platform — the fixes made along the way (fastembed
+instead of PyTorch, lazy chat imports, non-blocking indexing) are
+genuine improvements that travel with the app regardless of where it
+runs.
+
+**What changed in the codebase for this**: only what's genuinely
+platform-specific. `railway.json` (new) explicitly pins the Dockerfile
+builder — Railway auto-detects a root `Dockerfile` by default, but
+there are recent, documented community reports of Railway's own
+auto-builder (Railpack) still misdetecting and ignoring a Dockerfile in
+some repo layouts unless this is set explicitly, so it's pinned rather
+than relied on implicitly. The Dockerfile's own `HEALTHCHECK` was
+fixed to respect `$PORT` instead of a hardcoded `8000` (a small,
+genuine pre-existing correctness gap, surfaced by moving to a platform
+where getting this right matters for its own health probing).
+Everything else — the entrypoint script, the migration handling, the
+embedding runtime, the async indexing fix — is completely unchanged;
+none of it was ever Render-specific to begin with.
+
+**Steps**:
+
+1. **Create the Railway project.** At [railway.app](https://railway.app),
+   create a new project, then "Deploy from GitHub repo" and select this
+   repository (or the `backend/` directory specifically, if it lives
+   inside a larger monorepo — set that as the service's **Root
+   Directory** in Railway's service settings if so).
+
+2. **Confirm the Dockerfile builder is actually being used.** `railway.json`
+   sets this explicitly, but given the documented Railpack-detection
+   issue mentioned above, verify it once in the dashboard anyway: the
+   service's Settings → Build should show **Builder: Dockerfile**. If it
+   instead shows Railpack, manually override it to Dockerfile in that
+   same settings panel — don't rely on the config file alone if the
+   dashboard disagrees with it.
+
+3. **Set environment variables.** In the service's Variables tab, set
+   everything from the table in the section above, plus:
+   - `DATABASE_URL` — the Render PostgreSQL connection string from the
+     previous section (with the `+asyncpg` scheme).
+   - `CORS_ORIGINS` — your Vercel frontend's real deployed URL (e.g.
+     `https://your-app.vercel.app`). This is a plain, comma-separated
+     string setting (`app/core/config.py`'s `CORS_ORIGINS`) — no code
+     change needed, just the correct value for where the frontend
+     actually lives now.
+
+   Do **not** set `PORT` yourself — Railway injects it automatically,
+   and the entrypoint script already reads it (`${PORT:-8000}`).
+
+4. **Do not set a custom Start Command** in Railway's service settings.
+   Leave it blank so the image's own `ENTRYPOINT` (`docker-entrypoint.sh`)
+   runs with no arguments, which is what makes it take the "run
+   migrations, then start uvicorn on `$PORT`" path. If a start command
+   is set, it's passed to the entrypoint as arguments — the script does
+   handle that gracefully (see its own comments), but leaving it unset
+   is simpler and avoids any doubt.
+
+5. **Deploy, then get the public URL.** Railway → Settings → Networking
+   → Generate Domain gives you a `*.up.railway.app` address (or attach
+   a custom domain). Watch the deploy logs for `"Database is ready"` →
+   the 5 migration lines → `"Starting application..."` — the same
+   sequence documented above, now running on Railway instead of Render.
+
+6. **Point the frontend at the new backend URL.** On Vercel, update
+   `NEXT_PUBLIC_API_BASE_URL` to the Railway URL from step 5, and
+   redeploy the frontend. This is the one required change on the
+   frontend side of this migration — nothing else about it changes.
+
+7. **Verify end to end**: register a new account, create a knowledge
+   source, upload and index a document, confirm it reaches `INDEXED`
+   (not stuck, not `FAILED`), then chat against it.
+
 ### Production Deployment: Vector Store & Redis
 
-**Deploying only the backend + PostgreSQL to Render is not a complete
+**Deploying only the backend + PostgreSQL is not a complete
 deployment.** Indexing and retrieval depend on a reachable Qdrant
 instance, and locally that's provided by `docker-compose.yml`'s own
 `qdrant` service, networked to the API container by Docker's internal
-DNS (`QDRANT_URL=http://qdrant:6333`). Render doesn't run
-docker-compose — a Render web service is deployed in isolation, with
+DNS (`QDRANT_URL=http://qdrant:6333`). A single deployed container on
+any platform (Render, Railway, or otherwise) runs in isolation, with
 none of its sibling containers — so `QDRANT_URL` silently falls back
 to its `http://localhost:6333` default, and indexing fails with
 `ResponseHandlingException: [Errno 111] Connection refused`, because
@@ -978,36 +1063,29 @@ is the single place the client gets constructed; every other consumer —
 the indexing pipeline, hybrid retrieval, the chunks endpoint — goes
 through it via dependency injection, not a separate connection).
 
-**2. Recommended production setup: Qdrant Cloud**, not self-hosting on
-Render. Qdrant Cloud is the official managed offering from the same
-team that builds Qdrant itself — same product, zero code changes
-beyond configuration, and it has a free tier sized comfortably for a
-project at this scale. It's also architecturally the better fit than
-self-hosting on Render specifically: Render's free tier has no
-persistent disks (a self-hosted Qdrant there would lose all indexed
-vectors on every restart/redeploy) and free-tier web services sleep
-after inactivity (reintroducing the exact kind of cold-start
-connection failure this investigation started with). Qdrant Cloud has
-neither problem — it's always on, with real persistent storage.
+**2. Recommended production setup: Qdrant Cloud**, not self-hosting
+alongside the API. Qdrant Cloud is the official managed offering from
+the same team that builds Qdrant itself — same product, zero code
+changes beyond configuration, and it has a free tier sized comfortably
+for a project at this scale. It's also architecturally the better fit
+than self-hosting on a free-tier compute platform specifically: no
+persistent disk on most free tiers (a self-hosted Qdrant there would
+lose all indexed vectors on every restart/redeploy) and free-tier
+services commonly sleep after inactivity (reintroducing exactly the
+kind of cold-start connection failure this investigation started
+with). Qdrant Cloud has neither problem — it's always on, with real
+persistent storage.
 
 Exact steps:
 1. Create a free cluster at [cloud.qdrant.io](https://cloud.qdrant.io).
 2. Copy its **cluster URL** (a `https://...cloud.qdrant.io:6333`
    address) and generate an **API key** from the cluster's dashboard.
-3. On Render, set `QDRANT_URL` to that cluster URL and `QDRANT_API_KEY`
-   to the generated key (see the environment variable table below).
+3. Set `QDRANT_URL` to that cluster URL and `QDRANT_API_KEY` to the
+   generated key on whichever platform hosts the API (see the
+   environment variable table below).
 4. Redeploy. No other configuration is needed — `QDRANT_COLLECTION_NAME`
    stays whatever it already is; the collection is created automatically
    on first insert.
-
-**If self-hosting on Render is preferred anyway** (e.g. an existing
-paid plan with persistent disks already in place): deploy
-`qdrant/qdrant:latest` directly as its own Render **Private Service**
-(Render supports deploying any public Docker image, not just images
-built from this repo), attach a persistent disk mounted at
-`/qdrant/storage`, and point `QDRANT_URL` at that service's internal
-Render address. `QDRANT_API_KEY` can stay unset in this case unless
-Qdrant's own auth is explicitly enabled on that instance.
 
 **Bug fixed alongside this investigation**: `QDRANT_API_KEY` already
 existed as a config field, but `build_qdrant_client()` never actually
@@ -1019,32 +1097,32 @@ cleanly, and passing `api_key=None` (today's default when unset) is
 behaviorally identical to the old code never passing the parameter at
 all — this fix changes nothing for the existing local/no-auth setup.
 
-**5. Is Redis actually required?** No — confirmed by searching the
+**3. Is Redis actually required?** No — confirmed by searching the
 entire codebase for real Redis client usage. Every single reference to
 Redis anywhere in `app/` is a *comment* explaining what does **not**
 depend on it (e.g. the `/health` endpoint's docstring, the startup
-lifespan hook's docstring). `REDIS_URL` exists as a config field and
-`docker-compose.yml` used to run a `redis` container, but nothing ever
-actually connects to it — no caching, no session storage, no rate
-limiting, no task queue. It was scaffolded early for a possible future
-phase and never wired to any feature. **Do not deploy a Redis instance
-on Render for this version of the app** — it would be a running
-service providing zero functional benefit. (`docker-compose.yml`'s
-`redis` service was removed for the same reason — one less container
-to start locally for something that was never actually used.)
+lifespan hook's docstring). `REDIS_URL` exists as a config field, but
+nothing ever actually connects to it — no caching, no session storage,
+no rate limiting, no task queue. It was scaffolded early for a possible
+future phase and never wired to any feature. **Do not deploy a Redis
+instance for this version of the app**, on any platform — it would be
+a running service providing zero functional benefit.
+(`docker-compose.yml`'s `redis` service was removed for the same
+reason — one less container to start locally for something that was
+never actually used.)
 
-**4. Environment variables that must be updated for a complete Render
-deployment** (building on the migration-related ones from the section
-above):
+**4. Environment variables that must be set for a complete deployment**
+regardless of which platform hosts the API:
 
 | Variable | Required? | Value |
 |---|---|---|
-| `DATABASE_URL` | Yes (already covered above) | `postgresql+asyncpg://...` |
-| `JWT_SECRET_KEY` | Yes (already covered above) | A real random secret |
-| `QDRANT_URL` | **Yes — this is the actual fix for this issue** | Qdrant Cloud cluster URL (or a self-hosted Render service's internal address) |
-| `QDRANT_API_KEY` | Yes, if using Qdrant Cloud (or a self-hosted instance with auth enabled) | The API key from your Qdrant Cloud cluster dashboard |
+| `DATABASE_URL` | Yes | `postgresql+asyncpg://...` (Render PostgreSQL's connection string — see below) |
+| `JWT_SECRET_KEY` | Yes | A real random secret |
+| `QDRANT_URL` | Yes | Qdrant Cloud cluster URL |
+| `QDRANT_API_KEY` | Yes, if using Qdrant Cloud | The API key from your Qdrant Cloud cluster dashboard |
 | `REDIS_URL` | No — do not set, do not deploy a Redis service | — |
 | `GROQ_API_KEY` (or another provider key) | Yes, for chat to actually generate responses | Your provider's key |
+| `CORS_ORIGINS` | Yes | Your deployed frontend's real origin (e.g. `https://your-app.vercel.app`) — see Railway section below |
 
 ### Option B — Local virtualenv
 
