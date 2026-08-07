@@ -82,22 +82,43 @@ class IndexingService:
         try:
             text = Path(document.extracted_text_path).read_text(encoding="utf-8")
 
-            chunks = self.chunker.chunk(
-                text=text,
-                document_id=str(document.id),
-                knowledge_source_id=str(document.knowledge_source_id),
-                document_name=document.original_filename or document.name,
-            )
+            try:
+                chunks = self.chunker.chunk(
+                    text=text,
+                    document_id=str(document.id),
+                    knowledge_source_id=str(document.knowledge_source_id),
+                    document_name=document.original_filename or document.name,
+                )
+            except Exception:
+                logger.exception("Document %s failed during chunking", document_id)
+                raise
+
             nodes = [_chunk_to_node(chunk) for chunk in chunks]
 
-            storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
-            VectorStoreIndex(
-                nodes,
-                storage_context=storage_context,
-                embed_model=self.embed_model,
-            )
-        except Exception as exc:
-            logger.error("Document %s failed to index: %s", document_id, exc)
+            try:
+                storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
+                VectorStoreIndex(
+                    nodes,
+                    storage_context=storage_context,
+                    embed_model=self.embed_model,
+                )
+            except Exception:
+                logger.exception(
+                    "Document %s failed while embedding/storing %d chunk(s) "
+                    "(this is the embed-and-write-to-Qdrant step, distinct "
+                    "from loading the embedding model itself, which -- if "
+                    "that's where this actually failed -- would have logged "
+                    "separately from app.knowledge_engine.embeddings.embedding_model)",
+                    document_id,
+                    len(nodes),
+                )
+                raise
+        except Exception:
+            # logger.exception (not logger.error) so the full traceback
+            # reaches the logs, not just str(exc) -- a bare exception
+            # message alone was previously the only thing recorded here,
+            # which usually isn't enough to actually diagnose what failed.
+            logger.exception("Document %s failed to index", document_id)
             document.index_status = "FAILED"
             await self.session.commit()
             raise
