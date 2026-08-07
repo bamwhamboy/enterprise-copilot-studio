@@ -42,9 +42,13 @@ FastAPI backend for Enterprise Copilot Studio.
 | Containerization| Docker / Docker Compose          |
 | Testing         | pytest, pytest-asyncio, httpx    |
 
-Redis, Qdrant, LiteLLM, LangGraph, and LlamaIndex remain provisioned in
-`docker-compose.yml` / `.env.example` but unused in code — that's a later
-phase.
+Qdrant, LiteLLM, LangGraph, and LlamaIndex are all actively used (RAG
+indexing/retrieval, the LLM gateway, and chat orchestration
+respectively — see their dedicated sections below). Redis is the one
+exception: still provisioned in `.env.example` for a possible future
+phase, but genuinely unused by any application code today — see
+"Production Deployment: Vector Store & Redis" for the full explanation
+and why it should not be deployed alongside this version of the app.
 
 ## Data Model (Sprint 2)
 
@@ -781,6 +785,94 @@ database from your own machine (e.g. to debug), point `DATABASE_URL`
 at Render's connection string locally and run `alembic upgrade head`
 directly — no Docker required for this, since `alembic/env.py` reads
 the URL from the same `Settings` object the app itself uses.
+
+### Production Deployment: Vector Store & Redis
+
+**Deploying only the backend + PostgreSQL to Render is not a complete
+deployment.** Indexing and retrieval depend on a reachable Qdrant
+instance, and locally that's provided by `docker-compose.yml`'s own
+`qdrant` service, networked to the API container by Docker's internal
+DNS (`QDRANT_URL=http://qdrant:6333`). Render doesn't run
+docker-compose — a Render web service is deployed in isolation, with
+none of its sibling containers — so `QDRANT_URL` silently falls back
+to its `http://localhost:6333` default, and indexing fails with
+`ResponseHandlingException: [Errno 111] Connection refused`, because
+nothing is listening on that port inside the same container.
+
+**1. Does this project require Qdrant as a separate service in
+production?** Yes, unconditionally. Every indexing and search
+operation depends on it (`app/knowledge_engine/indexing/vector_store.py`
+is the single place the client gets constructed; every other consumer —
+the indexing pipeline, hybrid retrieval, the chunks endpoint — goes
+through it via dependency injection, not a separate connection).
+
+**2. Recommended production setup: Qdrant Cloud**, not self-hosting on
+Render. Qdrant Cloud is the official managed offering from the same
+team that builds Qdrant itself — same product, zero code changes
+beyond configuration, and it has a free tier sized comfortably for a
+project at this scale. It's also architecturally the better fit than
+self-hosting on Render specifically: Render's free tier has no
+persistent disks (a self-hosted Qdrant there would lose all indexed
+vectors on every restart/redeploy) and free-tier web services sleep
+after inactivity (reintroducing the exact kind of cold-start
+connection failure this investigation started with). Qdrant Cloud has
+neither problem — it's always on, with real persistent storage.
+
+Exact steps:
+1. Create a free cluster at [cloud.qdrant.io](https://cloud.qdrant.io).
+2. Copy its **cluster URL** (a `https://...cloud.qdrant.io:6333`
+   address) and generate an **API key** from the cluster's dashboard.
+3. On Render, set `QDRANT_URL` to that cluster URL and `QDRANT_API_KEY`
+   to the generated key (see the environment variable table below).
+4. Redeploy. No other configuration is needed — `QDRANT_COLLECTION_NAME`
+   stays whatever it already is; the collection is created automatically
+   on first insert.
+
+**If self-hosting on Render is preferred anyway** (e.g. an existing
+paid plan with persistent disks already in place): deploy
+`qdrant/qdrant:latest` directly as its own Render **Private Service**
+(Render supports deploying any public Docker image, not just images
+built from this repo), attach a persistent disk mounted at
+`/qdrant/storage`, and point `QDRANT_URL` at that service's internal
+Render address. `QDRANT_API_KEY` can stay unset in this case unless
+Qdrant's own auth is explicitly enabled on that instance.
+
+**Bug fixed alongside this investigation**: `QDRANT_API_KEY` already
+existed as a config field, but `build_qdrant_client()` never actually
+passed it to `QdrantClient(...)` — a real, silent bug that would have
+made step 3 above appear to work (no error) while still connecting
+unauthenticated, which Qdrant Cloud would reject. Fixed and verified:
+constructing the client both with and without an API key succeeds
+cleanly, and passing `api_key=None` (today's default when unset) is
+behaviorally identical to the old code never passing the parameter at
+all — this fix changes nothing for the existing local/no-auth setup.
+
+**5. Is Redis actually required?** No — confirmed by searching the
+entire codebase for real Redis client usage. Every single reference to
+Redis anywhere in `app/` is a *comment* explaining what does **not**
+depend on it (e.g. the `/health` endpoint's docstring, the startup
+lifespan hook's docstring). `REDIS_URL` exists as a config field and
+`docker-compose.yml` used to run a `redis` container, but nothing ever
+actually connects to it — no caching, no session storage, no rate
+limiting, no task queue. It was scaffolded early for a possible future
+phase and never wired to any feature. **Do not deploy a Redis instance
+on Render for this version of the app** — it would be a running
+service providing zero functional benefit. (`docker-compose.yml`'s
+`redis` service was removed for the same reason — one less container
+to start locally for something that was never actually used.)
+
+**4. Environment variables that must be updated for a complete Render
+deployment** (building on the migration-related ones from the section
+above):
+
+| Variable | Required? | Value |
+|---|---|---|
+| `DATABASE_URL` | Yes (already covered above) | `postgresql+asyncpg://...` |
+| `JWT_SECRET_KEY` | Yes (already covered above) | A real random secret |
+| `QDRANT_URL` | **Yes — this is the actual fix for this issue** | Qdrant Cloud cluster URL (or a self-hosted Render service's internal address) |
+| `QDRANT_API_KEY` | Yes, if using Qdrant Cloud (or a self-hosted instance with auth enabled) | The API key from your Qdrant Cloud cluster dashboard |
+| `REDIS_URL` | No — do not set, do not deploy a Redis service | — |
+| `GROQ_API_KEY` (or another provider key) | Yes, for chat to actually generate responses | Your provider's key |
 
 ### Option B — Local virtualenv
 
