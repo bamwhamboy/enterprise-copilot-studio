@@ -23,14 +23,14 @@ export function ConversationList({
   onDelete,
 }: ConversationListProps) {
   return (
-    <div className="flex h-full flex-col border-r border-border bg-card/40">
+    <div className="flex h-full min-h-0 flex-col border-r border-border bg-card/40">
       <div className="p-3">
         <Button variant="outline" className="w-full justify-start gap-2" onClick={onNew}>
           <MessageSquarePlus className="size-4" />
           New conversation
         </Button>
       </div>
-      <ScrollArea className="flex-1 px-2">
+      <ScrollArea className="min-h-0 flex-1 px-2">
         <div className="flex flex-col gap-1 pb-3">
           {sessions.length === 0 && (
             <p className="px-2.5 py-6 text-center text-xs text-muted-foreground">

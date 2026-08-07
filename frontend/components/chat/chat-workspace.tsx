@@ -278,7 +278,7 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
         />
       </div>
 
-      <div className="flex min-w-0 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-col">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-border bg-card/60 px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
@@ -317,7 +317,7 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
         </div>
 
         {/* Messages */}
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-h-0 flex-1">
           {messages.length === 0 ? (
             <SuggestedPrompts
               copilotName={copilot.name}
