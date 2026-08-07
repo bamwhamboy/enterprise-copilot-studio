@@ -226,11 +226,13 @@ end to end against real (in-memory) Qdrant and PyMuPDF-generated PDFs.
 **One caveat**: this sandbox has no network access to `huggingface.co`,
 so the real `BAAI/bge-small-en-v1.5` embedding model can't be downloaded
 here — the code path is real (`app/knowledge_engine/embeddings/embedding_model.py`
-builds the actual `HuggingFaceEmbedding`), but everything was verified
+builds the actual `FastEmbedEmbedding`), but everything was verified
 using LlamaIndex's `MockEmbedding` (identical interface, no network) so
 the pipeline mechanics — chunking, indexing, hybrid retrieval, fusion,
 compression, citations — are proven correct; only embedding *quality*
-is unverified in this environment.
+is unverified in this environment. (The embedding runtime itself changed
+later, after a real production OOM on Render's 512MB tier — see
+"Low-Memory Embedding Runtime" below.)
 
 ```
 app/knowledge_engine/
@@ -240,7 +242,7 @@ app/knowledge_engine/
 │                                   # Section -> Subsection -> Paragraph, parent-child
 │                                   # relationships preserved)
 ├── embeddings/
-│   └── embedding_model.py         # HuggingFaceEmbedding factory (BAAI/bge-small-en-v1.5)
+│   └── embedding_model.py         # FastEmbedEmbedding factory (BAAI/bge-small-en-v1.5, ONNX Runtime)
 ├── indexing/
 │   ├── vector_store.py            # QdrantClient + QdrantVectorStore wiring
 │   └── indexing_service.py        # chunk -> embed -> store -> update Postgres status
@@ -356,6 +358,47 @@ Qdrant with `MockEmbedding` — see `tests/conftest.py`'s
 `app.dependency_overrides`. In an environment with network access to
 huggingface.co, remove those overrides to test against the real
 embedding model.
+
+## Low-Memory Embedding Runtime (production fix)
+
+The embedding model originally ran on `HuggingFaceEmbedding`
+(sentence-transformers + PyTorch). In production on Render's 512MB
+instance tier, this got the process SIGKILLed by the OS during model
+loading — confirmed via Render's own logs. Root cause: PyTorch's own
+import/runtime overhead (300–500MB+, independent of any model) was the
+dominant memory cost, not the embedding model itself, which was already
+one of the smaller BGE variants.
+
+**Fix**: swapped the runtime, not the model. `app/knowledge_engine/
+embeddings/embedding_model.py` now builds a `FastEmbedEmbedding`
+(`llama-index-embeddings-fastembed` + `fastembed`, running on ONNX
+Runtime) instead of `HuggingFaceEmbedding`. Same model
+(`BAAI/bge-small-en-v1.5`), same 384-dimension embedding space — the
+existing Qdrant collection schema needed no migration, and nothing in
+the retrieval/indexing pipeline downstream of `build_embedding_model()`
+changed at all.
+
+**Verified, not assumed**: a clean `pip install -r requirements.txt` in
+an isolated venv resolves with zero conflicts (`pip check` passes) and
+installs no `torch` package at all. Importing the actual class the app
+uses (`from llama_index.embeddings.fastembed import FastEmbedEmbedding`)
+costs ~105MB RSS, confirmed via `sys.modules` to never load `torch` or
+`sentence_transformers`. The model weights themselves are a quantized
+ONNX export (`qdrant/bge-small-en-v1.5-onnx-q`, ~67MB — about half the
+original ~130MB float32 weights). This sandbox has the same
+`huggingface.co` network restriction noted above, so the *final* peak
+RSS after a full model load couldn't be measured end-to-end here
+either — watch this module's own `peak RSS after load` log line on the
+actual Render deployment for that number.
+
+**Retrieval quality trade-off**: INT8 quantization (the `-q` in the
+source model name) typically causes a small, often not perceptible
+reduction in embedding precision versus the original float32 weights —
+it's the same model, not a smaller or different one. The realistic
+comparison on a 512MB instance isn't "full precision vs. slightly
+reduced precision" — it's "slightly reduced precision that actually
+runs vs. full precision that gets killed by the OS and indexes nothing
+at all."
 
 ## Enterprise AI Runtime (Sprint 5)
 
@@ -874,7 +917,7 @@ the standard library (`abc`, `contextvars`, `enum`) already in the project.
 | Package | Why |
 |---|---|
 | `llama-index-core` | Hierarchical chunking, indexing, retrieval orchestration |
-| `llama-index-embeddings-huggingface` | `BAAI/bge-small-en-v1.5` embeddings |
+| `llama-index-embeddings-fastembed`, `fastembed` | `BAAI/bge-small-en-v1.5` embeddings (ONNX Runtime, not PyTorch) |
 | `llama-index-vector-stores-qdrant` | Qdrant integration for LlamaIndex |
 | `llama-index-retrievers-bm25` | BM25 sparse retrieval |
 | `qdrant-client` | Vector database client (pinned to 1.18.0 — see version note in `requirements.txt`) |
@@ -891,6 +934,10 @@ Also bumped in Sprint 5 (necessary, not optional — see `requirements.txt` comm
 `tokenizers>=0.21.0`, which the Sprint 3B pin couldn't satisfy. Re-verified the torch/numpy
 ABI fix from Sprint 3B still holds with the new versions before shipping (full 65-test
 regression suite, clean, before any Sprint 5 code was written).
+*(`transformers`/`torch`/`sentence-transformers` were removed from the dependency tree
+entirely in the later low-memory embedding runtime fix — see "Low-Memory Embedding
+Runtime" above. This paragraph is kept as an accurate historical record of that point
+in the project, not a description of the current dependency set.)*
 
 **Sprint 6:**
 

@@ -131,7 +131,7 @@ PromptRendererDep = Annotated[PromptRenderer, Depends(get_prompt_renderer)]
 
 # --- Sprint 3B: Enterprise Hybrid Hierarchical RAG DI providers -------------
 # Qdrant client and the embedding model are expensive to build (the real
-# HuggingFaceEmbedding loads model weights) so they're cached as process-wide
+# FastEmbedEmbedding loads model weights) so they're cached as process-wide
 # singletons here rather than rebuilt per request — while still being
 # overridable in tests via app.dependency_overrides (see tests/conftest.py,
 # which overrides get_embed_model with a MockEmbedding).

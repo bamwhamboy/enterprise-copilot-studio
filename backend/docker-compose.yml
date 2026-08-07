@@ -20,11 +20,8 @@ services:
       # would otherwise copy it into the container. It's harmless either way
       # (PATH points at /opt/venv, built inside the image — see Dockerfile),
       # but this guarantees a host-created venv is never even visible here.
-      # AI dependencies (torch, transformers, sentence-transformers, etc.)
-      # are installed only inside this container's image, never expected on
-      # the host — this matters in particular on Intel macOS, where PyPI
-      # has not published torch wheels newer than 2.2.2 since PyTorch
-      # deprecated Intel-macOS builds starting with the 2.3.0 release.
+      # This also keeps platform-specific dependencies installed only
+      # inside this container's image, never expected on the host.
       - /app/.venv
     command: >
       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
