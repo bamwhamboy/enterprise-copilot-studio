@@ -8,6 +8,7 @@ chunk in Qdrant -> update the Document row's chunk/embedding counts and
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import uuid
 from pathlib import Path
@@ -52,6 +53,19 @@ def _chunk_to_node(chunk: HierarchicalChunk) -> TextNode:
     return TextNode(text=chunk.text, id_=chunk.node_id, metadata=metadata)
 
 
+def _build_vector_index(
+    nodes: list[TextNode],
+    storage_context: StorageContext,
+    embed_model: BaseEmbedding,
+) -> None:
+    """Plain, synchronous entry point for the embed-and-write-to-Qdrant
+    step -- kept as a standalone module-level function (rather than
+    called inline) specifically so it has a single, unambiguous call
+    site to hand to ``asyncio.to_thread`` below.
+    """
+    VectorStoreIndex(nodes, storage_context=storage_context, embed_model=embed_model)
+
+
 class IndexingService:
     """Runs the chunk -> embed -> store -> status-update pipeline for one document."""
 
@@ -84,7 +98,18 @@ class IndexingService:
             text = Path(document.extracted_text_path).read_text(encoding="utf-8")
 
             try:
-                chunks = self.chunker.chunk(
+                # asyncio.to_thread: chunking is synchronous, CPU-bound
+                # work (tiktoken tokenization across up to 3 hierarchical
+                # levels) that previously ran directly on the event loop,
+                # blocking it -- including blocking this same process's
+                # ability to answer Render's own health check request to
+                # /health, which has zero real dependencies and would
+                # otherwise respond instantly -- for the entire duration.
+                # A health-check timeout during that blocked window
+                # produces a forceful restart that's indistinguishable
+                # from an OOM kill by exit code alone (both are 137).
+                chunks = await asyncio.to_thread(
+                    self.chunker.chunk,
                     text=text,
                     document_id=str(document.id),
                     knowledge_source_id=str(document.knowledge_source_id),
@@ -112,10 +137,20 @@ class IndexingService:
 
             try:
                 storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
-                VectorStoreIndex(
-                    nodes,
-                    storage_context=storage_context,
-                    embed_model=self.embed_model,
+                # Same reasoning as the chunking step above -- ONNX
+                # Runtime inference across every chunk (and, on the very
+                # first indexing request in the process's lifetime, the
+                # one-time embedding model download+load happening
+                # underneath it) is the single longest CPU-bound stretch
+                # in this whole pipeline, and the one most likely to
+                # exceed a health-check timeout if left blocking the
+                # event loop. Both ONNX Runtime's native inference and
+                # tiktoken's Rust tokenizer release the GIL during their
+                # actual computation, which is what makes offloading to a
+                # thread (not just moving the same blocking problem
+                # elsewhere) genuinely effective here.
+                await asyncio.to_thread(
+                    _build_vector_index, nodes, storage_context, self.embed_model
                 )
             except Exception:
                 logger.exception(

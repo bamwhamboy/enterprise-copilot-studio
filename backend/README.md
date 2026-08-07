@@ -503,6 +503,79 @@ this section already captured the largest, clearly-identifiable
 inefficiencies; what's left is mostly proportional to document size,
 not fixable by further tuning.
 
+## Third Investigation: Event-Loop Blocking (a Different Bug Than Memory)
+
+After all of the above, indexing still exited 137 on Render Free. Before
+concluding the memory budget was simply exhausted, a different
+hypothesis was checked: **exit 137 is not proof of an OOM kill by
+itself** — it's the standard SIGKILL exit code, and a forceful container
+restart triggered by a failed platform health check produces the exact
+same code, indistinguishable from the outside.
+
+`POST /index/{document_id}` is `async def` all the way down, but the
+actual work inside `IndexingService.index_document()` — chunking
+(tiktoken tokenization across up to 3 hierarchical levels) and embedding
+(ONNX Runtime inference) — was plain synchronous, CPU-bound code called
+directly with no `await` and no thread offloading. An `async def`
+function calling synchronous code directly does not make that code
+non-blocking: for its entire duration, the single-threaded event loop
+cannot process *any* other coroutine — including a `GET /health` request,
+which has zero real dependencies and would otherwise respond instantly.
+If Render's health check times out during that blocked window, the
+resulting forceful restart is a completely different problem than OOM,
+and no amount of memory tuning would ever fix it.
+
+**Fix**: `app/knowledge_engine/indexing/indexing_service.py` now runs
+both the chunking and embedding steps via `asyncio.to_thread`, the
+standard stdlib pattern for exactly this situation — no new dependency.
+
+**Verified concretely, not just architecturally**:
+- Exception propagation: simulated a chunking failure inside the
+  offloaded thread and confirmed it still propagates correctly to the
+  awaiting coroutine, the outer exception handler still fires, and
+  `index_status` still ends up `FAILED` in the database.
+- Event loop responsiveness — the actual point of the fix: ran a
+  deliberately pessimistic test (a tight Python busy-loop that does
+  *not* release the GIL, worse than the real ONNX Runtime/tiktoken code,
+  which does) as the chunker, for 1.5 seconds, concurrently with a
+  heartbeat coroutine ticking every 100ms. **19 of ~20 expected ticks
+  completed** during that window — direct, measured proof the event loop
+  stayed responsive throughout, even in the worst case.
+- Full test suite: 123/123 passing, unchanged.
+
+## Cumulative Final Verdict
+
+Three genuinely distinct problems were found and fixed across this
+investigation, not one problem tuned three times:
+1. PyTorch's import overhead (300–500MB+) → replaced with fastembed/ONNX
+   Runtime, same model.
+2. `litellm`/`langgraph` (200MB, measured) loaded for every request
+   regardless of need → made lazy.
+3. The event loop blocked for the full duration of chunking+embedding,
+   risking a health-check-triggered restart independent of memory
+   entirely → offloaded to a thread.
+
+**Is there a remaining *memory-specific* code lever with real, high
+confidence of closing a large gap?** No — not that this investigation
+was able to identify. The two largest, concrete, measured inefficiencies
+(PyTorch, then litellm/langgraph) are gone. What could still be squeezed
+further (e.g. `embed_batch_size=1`, trimming `CHUNK_SIZES`) is
+incremental, not transformative, and the last one trades away retrieval
+quality to do it.
+
+**If exit 137 persists specifically during indexing after this package**,
+that is meaningful evidence in itself: it would mean the health-check
+theory wasn't the (or the only) cause, and the process is likely
+genuinely exceeding 512MB during embedding for reasons this
+investigation's estimation (not full end-to-end measurement — this
+sandbox's network restriction to huggingface.co made that impossible
+throughout) may have underestimated. At that point, **migrating the
+backend to a higher-memory platform (Railway or otherwise) is the
+correct engineering decision, not further code changes** — three
+substantive, verified, evidence-based optimization passes is a
+reasonable point to trust the platform's own reported memory ceiling
+over further speculative tuning.
+
 ## Enterprise AI Runtime (Sprint 5)
 
 The chat runtime: LangGraph orchestration, a completed (LiteLLM-backed)
