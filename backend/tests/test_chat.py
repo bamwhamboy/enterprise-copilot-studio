@@ -64,8 +64,10 @@ def _fake_acompletion(content: str):
     return fake
 
 
-async def _setup_copilot_with_indexed_document(client: AsyncClient) -> dict:
-    ks = (await client.post(KS_BASE, json={"name": "Chat Test HR Policies"})).json()
+async def _setup_copilot_with_indexed_document(client: AsyncClient, headers: dict) -> dict:
+    ks = (
+        await client.post(KS_BASE, json={"name": "Chat Test HR Policies"}, headers=headers)
+    ).json()
 
     pdf_bytes = _make_pdf_bytes(
         "Employees receive 20 days of paid annual leave per year. " * 20
@@ -75,14 +77,16 @@ async def _setup_copilot_with_indexed_document(client: AsyncClient) -> dict:
             f"{DOC_BASE}/upload",
             data={"knowledge_source_id": ks["id"]},
             files={"file": ("leave_policy.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+            headers=headers,
         )
     ).json()
-    await client.post(f"/api/v1/index/{doc['id']}")
+    await client.post(f"/api/v1/index/{doc['id']}", headers=headers)
 
     copilot = (
         await client.post(
             COPILOT_BASE,
             json={"name": "HR Copilot", "domain": "hr", "knowledge_source_ids": [ks["id"]]},
+            headers=headers,
         )
     ).json()
 
@@ -93,8 +97,8 @@ async def _setup_copilot_with_indexed_document(client: AsyncClient) -> dict:
 async def test_chat_returns_grounded_response_with_citations(
     client: AsyncClient, monkeypatch, register_and_login
 ) -> None:
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat1@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
 
     monkeypatch.setattr(
         "app.llm.providers.litellm.acompletion",
@@ -134,8 +138,8 @@ async def test_chat_requires_authentication(client: AsyncClient) -> None:
 async def test_chat_session_persists_and_reuses_history(
     client: AsyncClient, monkeypatch, register_and_login
 ) -> None:
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat2@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
 
     monkeypatch.setattr(
         "app.llm.providers.litellm.acompletion", _fake_acompletion("First answer.")
@@ -171,8 +175,8 @@ async def test_chat_session_persists_and_reuses_history(
 async def test_chat_rejects_prompt_injection_with_400(
     client: AsyncClient, monkeypatch, register_and_login
 ) -> None:
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat3@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
     monkeypatch.setattr(
         "app.llm.providers.litellm.acompletion", _fake_acompletion("should not be called")
     )
@@ -196,8 +200,8 @@ async def test_chat_rejects_prompt_injection_with_400(
 async def test_chat_masks_pii_in_response(
     client: AsyncClient, monkeypatch, register_and_login
 ) -> None:
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat4@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
     monkeypatch.setattr(
         "app.llm.providers.litellm.acompletion",
         _fake_acompletion("Contact hr@example.com or 555-123-4567 for details."),
@@ -232,8 +236,8 @@ async def test_chat_with_nonexistent_copilot_returns_404(
 async def test_chat_stream_yields_sse_events(
     client: AsyncClient, monkeypatch, register_and_login
 ) -> None:
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat6@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
 
     async def fake_stream(**kwargs):
         async def gen():
@@ -289,8 +293,8 @@ async def test_chat_and_chat_stream_produce_identical_final_text(
     input produce the exact same final response text and citation count
     -- not two independently-implemented answers that merely look similar.
     """
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat7@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
 
     async def make_fake_stream(content: str):
         async def fake(**kwargs):
@@ -355,8 +359,8 @@ async def test_chat_stream_delivers_chunks_incrementally_not_buffered(
     after an explicit await, so if the SSE frames only appeared after
     every delta had already been produced, this ordering check would fail.
     """
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat8@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
 
     produced_order: list[str] = []
     received_order: list[str] = []
@@ -398,7 +402,10 @@ async def test_chat_uses_the_copilots_configured_model(
 ) -> None:
     """The copilot's own `model` field must reach the actual LiteLLM call."""
     tokens = await register_and_login(email="chat9@test.com")
-    ks = (await client.post(KS_BASE, json={"name": "Model Selection Source"})).json()
+    headers = _auth_headers(tokens)
+    ks = (
+        await client.post(KS_BASE, json={"name": "Model Selection Source"}, headers=headers)
+    ).json()
     copilot = (
         await client.post(
             COPILOT_BASE,
@@ -407,6 +414,7 @@ async def test_chat_uses_the_copilots_configured_model(
                 "knowledge_source_ids": [ks["id"]],
                 "model": "openai/gpt-oss-120b",
             },
+            headers=headers,
         )
     ).json()
     assert copilot["model"] == "openai/gpt-oss-120b"
@@ -448,11 +456,15 @@ async def test_chat_falls_back_to_default_model_when_copilot_has_none(
     from app.core.config import get_settings
 
     tokens = await register_and_login(email="chat10@test.com")
-    ks = (await client.post(KS_BASE, json={"name": "Fallback Model Source"})).json()
+    headers = _auth_headers(tokens)
+    ks = (
+        await client.post(KS_BASE, json={"name": "Fallback Model Source"}, headers=headers)
+    ).json()
     copilot = (
         await client.post(
             COPILOT_BASE,
             json={"name": "No Model Copilot", "knowledge_source_ids": [ks["id"]], "model": ""},
+            headers=headers,
         )
     ).json()
     assert copilot["model"] == ""
@@ -491,8 +503,8 @@ async def test_chat_user_id_is_derived_from_auth_not_client_payload(
     user_id in the payload, the authenticated identity's id is what's
     actually used -- a client cannot impersonate another user this way.
     """
-    setup = await _setup_copilot_with_indexed_document(client)
     tokens = await register_and_login(email="chat11@test.com")
+    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
     me = (await client.get("/api/v1/users/me", headers=_auth_headers(tokens))).json()
 
     monkeypatch.setattr("app.llm.providers.litellm.acompletion", _fake_acompletion("ok"))
@@ -525,3 +537,72 @@ async def test_chat_user_id_is_derived_from_auth_not_client_payload(
         },
     )
     assert second.json()["session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_cannot_chat_with_another_organizations_copilot(
+    client: AsyncClient, register_and_login
+) -> None:
+    """Direct regression test for the tenant-isolation fix: a user
+    authenticated as one organization must not be able to start a chat
+    session against a copilot belonging to a different organization,
+    even if they know its id.
+    """
+    org_a_headers = _auth_headers(
+        await register_and_login(
+            email="chat-tenant-org-a@example.com", organization_name="Chat Tenant Org A"
+        )
+    )
+    setup = await _setup_copilot_with_indexed_document(client, org_a_headers)
+
+    org_b_headers = _auth_headers(
+        await register_and_login(
+            email="chat-tenant-org-b@example.com", organization_name="Chat Tenant Org B"
+        )
+    )
+    response = await client.post(
+        CHAT_BASE,
+        headers=org_b_headers,
+        json={"copilot_id": setup["copilot"]["id"], "message": "hello"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cannot_supply_another_organizations_knowledge_source_id_in_chat(
+    client: AsyncClient, monkeypatch, register_and_login
+) -> None:
+    """A user chatting with a copilot they legitimately own must not be
+    able to redirect retrieval at a different organization's knowledge
+    source just by supplying its id in the request body -- the copilot's
+    own attached sources are the only ones a request can select from.
+    """
+    org_a_headers = _auth_headers(
+        await register_and_login(
+            email="chat-ks-spoof-org-a@example.com", organization_name="KS Spoof Org A"
+        )
+    )
+    other_ks = (
+        await client.post(
+            KS_BASE, json={"name": "Org A's Other Source"}, headers=org_a_headers
+        )
+    ).json()
+
+    org_b_headers = _auth_headers(
+        await register_and_login(
+            email="chat-ks-spoof-org-b@example.com", organization_name="KS Spoof Org B"
+        )
+    )
+    setup = await _setup_copilot_with_indexed_document(client, org_b_headers)
+
+    monkeypatch.setattr("app.llm.providers.litellm.acompletion", _fake_acompletion("ok"))
+    response = await client.post(
+        CHAT_BASE,
+        headers=org_b_headers,
+        json={
+            "copilot_id": setup["copilot"]["id"],
+            "knowledge_source_id": other_ks["id"],
+            "message": "hello",
+        },
+    )
+    assert response.status_code == 404

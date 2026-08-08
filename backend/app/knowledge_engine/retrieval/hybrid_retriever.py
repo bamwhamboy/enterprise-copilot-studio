@@ -2,13 +2,16 @@
 
 Combines semantic (dense vector, via Qdrant) and BM25 (sparse,
 term-frequency) retrieval, fused with Reciprocal Rank Fusion (RRF).
-Supports metadata filtering by ``knowledge_source_id``.
+Supports metadata filtering by ``knowledge_source_id`` (a single id) or
+``knowledge_source_ids`` (a set of ids -- used to constrain a search to
+an organization's own knowledge sources without requiring the caller to
+pick one specific source).
 """
 
 from __future__ import annotations
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+from qdrant_client.http.models import FieldCondition, Filter, MatchAny, MatchValue
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.schema import NodeWithScore, TextNode
@@ -65,19 +68,35 @@ class HybridRetriever:
         self._vector_store = vector_store
         self._embed_model = embed_model
 
-    def _build_qdrant_filter(self, knowledge_source_id: str | None) -> Filter | None:
-        if not knowledge_source_id:
-            return None
-        return Filter(
-            must=[
-                FieldCondition(
-                    key="knowledge_source_id", match=MatchValue(value=knowledge_source_id)
-                )
-            ]
-        )
+    def _build_qdrant_filter(
+        self,
+        knowledge_source_id: str | None,
+        knowledge_source_ids: list[str] | None,
+    ) -> Filter | None:
+        if knowledge_source_id:
+            return Filter(
+                must=[
+                    FieldCondition(
+                        key="knowledge_source_id", match=MatchValue(value=knowledge_source_id)
+                    )
+                ]
+            )
+        if knowledge_source_ids:
+            return Filter(
+                must=[
+                    FieldCondition(
+                        key="knowledge_source_id", match=MatchAny(any=knowledge_source_ids)
+                    )
+                ]
+            )
+        return None
 
     def _fetch_corpus_nodes(
-        self, *, knowledge_source_id: str | None, limit: int = 1000
+        self,
+        *,
+        knowledge_source_id: str | None,
+        knowledge_source_ids: list[str] | None,
+        limit: int = 1000,
     ) -> list[TextNode]:
         """Scroll matching chunks from Qdrant to build a BM25 corpus.
 
@@ -86,7 +105,7 @@ class HybridRetriever:
         would maintain a persisted, incrementally-updated BM25 index
         instead of reconstructing it per request.
         """
-        query_filter = self._build_qdrant_filter(knowledge_source_id)
+        query_filter = self._build_qdrant_filter(knowledge_source_id, knowledge_source_ids)
         points, _ = self._client.scroll(
             collection_name=self._settings.QDRANT_COLLECTION_NAME,
             scroll_filter=query_filter,
@@ -104,25 +123,51 @@ class HybridRetriever:
         return nodes
 
     @staticmethod
-    def _to_llama_filters(knowledge_source_id: str | None):
-        if not knowledge_source_id:
-            return None
-        from llama_index.core.vector_stores.types import ExactMatchFilter, MetadataFilters
+    def _to_llama_filters(knowledge_source_id: str | None, knowledge_source_ids: list[str] | None):
+        if knowledge_source_id:
+            from llama_index.core.vector_stores.types import ExactMatchFilter, MetadataFilters
 
-        return MetadataFilters(
-            filters=[ExactMatchFilter(key="knowledge_source_id", value=knowledge_source_id)]
-        )
+            return MetadataFilters(
+                filters=[ExactMatchFilter(key="knowledge_source_id", value=knowledge_source_id)]
+            )
+        if knowledge_source_ids:
+            from llama_index.core.vector_stores.types import (
+                FilterOperator,
+                MetadataFilter,
+                MetadataFilters,
+            )
+
+            return MetadataFilters(
+                filters=[
+                    MetadataFilter(
+                        key="knowledge_source_id",
+                        value=knowledge_source_ids,
+                        operator=FilterOperator.IN,
+                    )
+                ]
+            )
+        return None
 
     def retrieve(
         self,
         query: str,
         *,
         knowledge_source_id: str | None = None,
+        knowledge_source_ids: list[str] | None = None,
         semantic_top_k: int | None = None,
         bm25_top_k: int | None = None,
         final_top_k: int | None = None,
     ) -> list[NodeWithScore]:
-        """Run semantic + BM25 retrieval and fuse the results via RRF."""
+        """Run semantic + BM25 retrieval and fuse the results via RRF.
+
+        ``knowledge_source_id`` restricts to exactly one source (existing
+        behavior, used by chat -- a copilot's resolved source). If not
+        given, ``knowledge_source_ids`` optionally restricts to a *set*
+        of sources (used by /search to constrain to an organization's
+        own sources without requiring the caller to pick just one). If
+        neither is given, retrieval is unrestricted -- unchanged from
+        before this parameter existed.
+        """
         if not self._client.collection_exists(self._settings.QDRANT_COLLECTION_NAME):
             logger.info("Search for %r found no collection yet — nothing indexed.", query)
             return []
@@ -138,12 +183,15 @@ class HybridRetriever:
         )
         semantic_retriever = index.as_retriever(
             similarity_top_k=semantic_top_k,
-            filters=self._to_llama_filters(knowledge_source_id),
+            filters=self._to_llama_filters(knowledge_source_id, knowledge_source_ids),
         )
         semantic_results = semantic_retriever.retrieve(query)
 
         # --- BM25 retrieval ---
-        corpus_nodes = self._fetch_corpus_nodes(knowledge_source_id=knowledge_source_id)
+        corpus_nodes = self._fetch_corpus_nodes(
+            knowledge_source_id=knowledge_source_id,
+            knowledge_source_ids=knowledge_source_ids,
+        )
         bm25_results: list[NodeWithScore] = []
         if corpus_nodes:
             bm25_retriever = BM25Retriever.from_defaults(

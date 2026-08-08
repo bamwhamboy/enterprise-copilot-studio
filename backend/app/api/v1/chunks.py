@@ -9,8 +9,9 @@ from fastapi import APIRouter
 from qdrant_client.http.models import FieldCondition, Filter, MatchValue
 from llama_index.core.vector_stores.utils import metadata_dict_to_node
 
-from app.core.dependencies import QdrantClientDep, SettingsDep
+from app.core.dependencies import DocumentServiceDep, QdrantClientDep, SettingsDep
 from app.schemas.chunk import ChunkListResponse, ChunkRead
+from app.security.dependencies import CurrentUser, scoped_organization_id
 
 router = APIRouter(prefix="/chunks", tags=["Chunks"])
 
@@ -22,9 +23,22 @@ router = APIRouter(prefix="/chunks", tags=["Chunks"])
 )
 async def list_chunks(
     document_id: uuid.UUID,
+    user: CurrentUser,
+    document_service: DocumentServiceDep,
     client: QdrantClientDep,
     settings: SettingsDep,
 ) -> ChunkListResponse:
+    # Enforces the same ownership check as GET /documents/{id} before
+    # returning any chunk content -- this endpoint returns actual
+    # document text, making it the most sensitive of the
+    # copilots/knowledge-sources/documents/chunks group if left
+    # unscoped. Raises NotFoundError (404) via the existing
+    # DocumentService check for a document belonging to a different
+    # organization, same as every other endpoint in this group.
+    await document_service.get_document(
+        document_id, organization_id=scoped_organization_id(user)
+    )
+
     if not client.collection_exists(settings.QDRANT_COLLECTION_NAME):
         return ChunkListResponse(document_id=str(document_id), chunks=[])
 

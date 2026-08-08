@@ -21,13 +21,16 @@ class CopilotRepository(BaseRepository[Copilot]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_all(self, *, offset: int = 0, limit: int = 100) -> list[Copilot]:
+    async def list_all(
+        self, *, offset: int = 0, limit: int = 100, organization_id: uuid.UUID | None = None
+    ) -> list[Copilot]:
         stmt = (
             select(Copilot)
             .options(selectinload(Copilot.knowledge_sources))
             .order_by(Copilot.created_at.desc())
-            .offset(offset)
-            .limit(limit)
         )
+        if organization_id is not None:
+            stmt = stmt.where(Copilot.organization_id == organization_id)
+        stmt = stmt.offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

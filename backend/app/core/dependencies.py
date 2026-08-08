@@ -305,14 +305,14 @@ async def get_chat_orchestrator(
     memory: ConversationMemoryServiceDep,
     guardrails: GuardrailsRuntimeDep,
     workflow: ChatWorkflowDep,
-    copilot_repository: CopilotRepositoryDep,
+    copilot_service: CopilotServiceDep,
 ) -> ChatOrchestratorService:
     return ChatOrchestratorService(
         settings,
         memory,
         guardrails,
         workflow,
-        copilot_repository,
+        copilot_service,
     )
 
 

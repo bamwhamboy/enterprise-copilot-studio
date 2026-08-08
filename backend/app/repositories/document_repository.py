@@ -3,13 +3,24 @@
 import uuid
 
 from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
 
 from app.models.document import Document
+from app.models.knowledge_source import KnowledgeSource
 from app.repositories.base import BaseRepository
 
 
 class DocumentRepository(BaseRepository[Document]):
     model = Document
+
+    async def get(self, id: uuid.UUID) -> Document | None:
+        stmt = (
+            select(Document)
+            .where(Document.id == id)
+            .options(selectinload(Document.knowledge_source))
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def list_all(
         self,
@@ -17,10 +28,18 @@ class DocumentRepository(BaseRepository[Document]):
         offset: int = 0,
         limit: int = 100,
         knowledge_source_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID | None = None,
     ) -> list[Document]:
         stmt = select(Document).order_by(Document.created_at.desc())
         if knowledge_source_id is not None:
             stmt = stmt.where(Document.knowledge_source_id == knowledge_source_id)
+        if organization_id is not None:
+            # Document has no organization_id column of its own -- it's
+            # deliberately scoped transitively through its parent
+            # KnowledgeSource (see that model's own comment on why).
+            stmt = stmt.join(
+                KnowledgeSource, Document.knowledge_source_id == KnowledgeSource.id
+            ).where(KnowledgeSource.organization_id == organization_id)
         stmt = stmt.offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

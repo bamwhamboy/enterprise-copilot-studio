@@ -64,6 +64,22 @@ async def get_current_active_user(user: Annotated[User, Depends(get_current_user
 CurrentUser = Annotated[User, Depends(get_current_active_user)]
 
 
+def scoped_organization_id(user: User) -> uuid.UUID | None:
+    """The organization a tenant-scoped query should filter by for this user.
+
+    Returns ``None`` for super_admin (see every organization's data,
+    matching the existing precedent in api/v1/organizations.py's own
+    "all, for super_admin; otherwise just your own" listing), otherwise
+    the user's own organization_id. Centralized here so every router
+    that needs tenant scoping (copilots, knowledge sources, documents)
+    applies the exact same rule rather than each re-deriving it slightly
+    differently.
+    """
+    from app.models.role import SUPER_ADMIN
+
+    return None if user.role.name == SUPER_ADMIN else user.organization_id
+
+
 def require_role(*role_names: str) -> Callable[[User], User]:
     """Dependency factory: only allow users whose role name is in role_names.
 

@@ -16,41 +16,66 @@ class KnowledgeSourceService:
         self.repository = KnowledgeSourceRepository(session)
 
     async def list_knowledge_sources(
-        self, *, offset: int = 0, limit: int = 100
+        self, *, offset: int = 0, limit: int = 100, organization_id: uuid.UUID | None = None
     ) -> list[KnowledgeSource]:
-        return await self.repository.list_all(offset=offset, limit=limit)
+        return await self.repository.list_all(
+            offset=offset, limit=limit, organization_id=organization_id
+        )
 
-    async def get_knowledge_source(self, knowledge_source_id: uuid.UUID) -> KnowledgeSource:
+    async def get_knowledge_source(
+        self, knowledge_source_id: uuid.UUID, *, organization_id: uuid.UUID | None = None
+    ) -> KnowledgeSource:
         knowledge_source = await self.repository.get(knowledge_source_id)
         if knowledge_source is None:
+            raise NotFoundError("KnowledgeSource", knowledge_source_id)
+        # See CopilotService.get_copilot for why this is 404, not 403.
+        if (
+            organization_id is not None
+            and knowledge_source.organization_id != organization_id
+        ):
             raise NotFoundError("KnowledgeSource", knowledge_source_id)
         return knowledge_source
 
     async def create_knowledge_source(
-        self, payload: KnowledgeSourceCreate
+        self, payload: KnowledgeSourceCreate, *, organization_id: uuid.UUID
     ) -> KnowledgeSource:
         knowledge_source = KnowledgeSource(
             name=payload.name,
             source_type=payload.source_type,
             status=payload.status,
+            organization_id=organization_id,
         )
         knowledge_source = await self.repository.create(knowledge_source)
         await self.session.commit()
-        return await self.get_knowledge_source(knowledge_source.id)
+        return await self.get_knowledge_source(
+            knowledge_source.id, organization_id=organization_id
+        )
 
     async def update_knowledge_source(
-        self, knowledge_source_id: uuid.UUID, payload: KnowledgeSourceUpdate
+        self,
+        knowledge_source_id: uuid.UUID,
+        payload: KnowledgeSourceUpdate,
+        *,
+        organization_id: uuid.UUID | None = None,
     ) -> KnowledgeSource:
-        knowledge_source = await self.get_knowledge_source(knowledge_source_id)
+        knowledge_source = await self.get_knowledge_source(
+            knowledge_source_id, organization_id=organization_id
+        )
 
         update_data = payload.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(knowledge_source, field, value)
 
         await self.session.commit()
-        return await self.get_knowledge_source(knowledge_source_id)
+        return await self.get_knowledge_source(
+            knowledge_source_id, organization_id=organization_id
+        )
 
-    async def delete_knowledge_source(self, knowledge_source_id: uuid.UUID) -> None:
-        knowledge_source = await self.get_knowledge_source(knowledge_source_id)
+    async def delete_knowledge_source(
+        self, knowledge_source_id: uuid.UUID, *, organization_id: uuid.UUID | None = None
+    ) -> None:
+        knowledge_source = await self.get_knowledge_source(
+            knowledge_source_id, organization_id=organization_id
+        )
         await self.repository.delete(knowledge_source)
         await self.session.commit()

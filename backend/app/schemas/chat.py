@@ -14,6 +14,13 @@ class ChatRequest(BaseModel):
     # regardless of what's sent here. Kept (rather than removed) only
     # so any old client payload still validates instead of erroring.
     user_id: str | None = Field(default=None, max_length=255)
+    # Tenant isolation follow-up: same pattern as user_id above -- always
+    # overridden at the API boundary (app/api/v1/chat.py) from the
+    # authenticated user's own organization, never trusted from the
+    # client. None means "unscoped" (super_admin) rather than "no
+    # organization" -- see security/dependencies.py's
+    # scoped_organization_id().
+    organization_id: uuid.UUID | None = None
     session_id: uuid.UUID | None = None
     message: str = Field(min_length=1, max_length=8000)
     knowledge_source_id: uuid.UUID | None = None

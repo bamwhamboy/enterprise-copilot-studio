@@ -899,6 +899,115 @@ server and real Postgres before being formalized into tests — including
 confirming a rotated refresh token becomes genuinely unusable and a
 logged-out token can't be replayed.
 
+## Tenant-Scoped CRUD & Dashboard Fix (follow-up to Sprint 6's scope decision)
+
+Sprint 6 deliberately left `/copilots`, `/knowledge-sources`, and
+`/documents` unauthenticated and unscoped — documented above as a known
+tradeoff, with `organization_id` columns added but not yet enforced.
+That gap surfaced in production: a brand-new user's dashboard showed
+other tenants' copilot and knowledge source counts, because
+`GET /copilots` and `GET /knowledge-sources` had no auth requirement at
+all and returned every row in the database. The dashboard calls the
+exact same list endpoints the dedicated Copilots/Knowledge Sources
+pages use, so fixing the endpoints fixes the dashboard with zero
+frontend changes.
+
+**Fixed, consistently, across all four related endpoints**:
+`/copilots`, `/knowledge-sources`, `/documents`, and `/chunks/{id}`
+(this last one wasn't explicitly named in the original request, but
+returns actual document text and had the identical gap — leaving it
+unscoped while locking down the other three would have left the most
+sensitive endpoint of the group unprotected).
+
+- Every list/get/create/update/delete operation now requires
+  authentication and is scoped to the caller's `organization_id`
+  (`super_admin` sees everything, matching the precedent already
+  established in `api/v1/organizations.py`'s own listing endpoint).
+- Cross-tenant access to a specific resource by id returns `404`, not
+  `403` — a caller can't distinguish "doesn't exist" from "exists but
+  isn't yours" by probing ids.
+- `Document` has no `organization_id` of its own — it's scoped
+  transitively through its parent `KnowledgeSource`, requiring a join
+  in the repository layer and an eager-loaded relationship (previously
+  absent) to check ownership without triggering an async lazy-load
+  error.
+- Two related gaps fixed in the same pass, found while tracing the
+  actual code paths: a copilot could previously be created attaching
+  another organization's knowledge source by id, and a document could
+  be uploaded into another organization's knowledge source by id. Both
+  now correctly 404.
+- One real, deliberate behavior change: `GET /chunks/{id}` for a
+  `document_id` that doesn't exist at all now returns 404 instead of
+  silently returning an empty chunk list — this endpoint never used to
+  check whether the document existed before querying Qdrant directly.
+  The new behavior matches how a nonexistent id already behaves
+  everywhere else in this API.
+
+**Verified with 21 new tests** (144 total, up from 123), not just
+reasoning about the code: every endpoint has an explicit
+`requires_auth` test, a direct regression test for the reported bug
+("a brand-new organization sees zero of another organization's
+resources"), and a cross-tenant access attempt for get/update/delete
+that confirms the resource is untouched and still fully accessible to
+its actual owner afterward.
+
+**Two related gaps were flagged rather than fixed in that pass** — both
+closed in an immediate follow-up, described next.
+
+## Tenant Isolation, Completed: Chat and Search
+
+The two gaps flagged above — `ChatOrchestratorService` bypassing the
+org-scoped `CopilotService`, and `GET /api/v1/search` having no
+authentication or scoping at all — are now closed, extending the same
+`organization_id` filtering to every remaining API path.
+
+**Chat**: `ChatOrchestratorService` now takes a `CopilotService`
+instead of a raw `CopilotRepository`, reusing its already-tested
+ownership check rather than duplicating it. `ChatRequest` gained an
+`organization_id` field following the exact same pattern already
+established for `user_id` — always overridden at the API boundary from
+the authenticated user, never trusted from the client. A second,
+related gap found while tracing this: a client could chat with a
+copilot they legitimately own but supply an arbitrary
+`knowledge_source_id` in the request body, redirecting retrieval at a
+different organization's content. Fixed by checking that any
+client-supplied `knowledge_source_id` is actually one of the resolved
+copilot's own attached sources (which `CopilotService`'s knowledge
+source attachment already guarantees are all same-organization, from
+the previous fix) before using it.
+
+**Search**: `GET /api/v1/search` now requires authentication. When a
+specific `knowledge_source_id` is requested, it's ownership-checked
+the same way the CRUD endpoints check it. When none is requested (the
+"search everything" case), the query is constrained to every knowledge
+source the caller's organization actually owns — resolved from
+Postgres via the same `KnowledgeSourceService` the CRUD endpoints use
+— rather than searching globally. This required a genuinely new
+capability in `HybridRetriever`: filtering by a *set* of knowledge
+source ids (`MatchAny` in Qdrant, `FilterOperator.IN` in LlamaIndex),
+added alongside the existing single-id filter without changing it —
+chat's own retrieval call is completely untouched, still using exactly
+the single-id path it always has.
+
+**A real bug caught by testing before it shipped**: an organization
+that owns zero knowledge sources needs to see zero search results —
+but an empty Python list is falsy, so `elif knowledge_source_ids:`
+would have silently fallen through to "no filter," searching every
+other organization's content instead. Confirmed this would actually
+happen by running it against a real Qdrant instance before adding the
+explicit guard, and confirmed again afterward that the guard fixes it.
+
+**Verified against real Qdrant, not just reasoned about**: `MatchAny`
+and LlamaIndex's `IN` operator were each tested directly (real
+in-memory Qdrant, real filtering, asserting the exact expected ids
+came back) before being relied on. The empty-owned-sources vulnerability
+above was proven to exist, then proven fixed, the same way. 6 new
+tests added (150 total, up from 144): auth requirements for both
+endpoints, a direct cross-org chat attempt, a knowledge-source-id
+spoofing attempt in chat, a cross-org search attempt, a full
+"organization A's content never appears in organization B's
+unscoped search" regression test, and the empty-owned-sources case.
+
 ## How to Run
 
 ### Option A — Docker Compose (recommended)

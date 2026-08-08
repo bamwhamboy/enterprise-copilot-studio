@@ -36,23 +36,53 @@ class DocumentService:
         offset: int = 0,
         limit: int = 100,
         knowledge_source_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID | None = None,
     ) -> list[Document]:
         return await self.repository.list_all(
-            offset=offset, limit=limit, knowledge_source_id=knowledge_source_id
+            offset=offset,
+            limit=limit,
+            knowledge_source_id=knowledge_source_id,
+            organization_id=organization_id,
         )
 
-    async def get_document(self, document_id: uuid.UUID) -> Document:
+    async def get_document(
+        self, document_id: uuid.UUID, *, organization_id: uuid.UUID | None = None
+    ) -> Document:
         document = await self.repository.get(document_id)
         if document is None:
             raise NotFoundError("Document", document_id)
+        # Document has no organization_id of its own -- ownership is
+        # checked via its parent KnowledgeSource (see that model's own
+        # comment on why). Same 404-not-403 reasoning as
+        # CopilotService.get_copilot.
+        if (
+            organization_id is not None
+            and document.knowledge_source.organization_id != organization_id
+        ):
+            raise NotFoundError("Document", document_id)
         return document
 
-    async def create_document(self, payload: DocumentCreate) -> Document:
-        # Confirm the parent knowledge source exists before creating a
-        # document under it — a clearer 404 than a raw FK violation.
-        parent = await self.knowledge_source_repository.get(payload.knowledge_source_id)
+    async def _get_owned_knowledge_source(
+        self, knowledge_source_id: uuid.UUID, *, organization_id: uuid.UUID | None
+    ):
+        """Fetch the parent knowledge source, enforcing it belongs to the
+        caller's organization before anything gets created/uploaded under
+        it -- without this, a user could attach a document to another
+        organization's knowledge source just by knowing its id.
+        """
+        parent = await self.knowledge_source_repository.get(knowledge_source_id)
         if parent is None:
-            raise NotFoundError("KnowledgeSource", payload.knowledge_source_id)
+            raise NotFoundError("KnowledgeSource", knowledge_source_id)
+        if organization_id is not None and parent.organization_id != organization_id:
+            raise NotFoundError("KnowledgeSource", knowledge_source_id)
+        return parent
+
+    async def create_document(
+        self, payload: DocumentCreate, *, organization_id: uuid.UUID | None = None
+    ) -> Document:
+        await self._get_owned_knowledge_source(
+            payload.knowledge_source_id, organization_id=organization_id
+        )
 
         document = Document(
             knowledge_source_id=payload.knowledge_source_id,
@@ -73,6 +103,7 @@ class DocumentService:
         filename: str,
         content_type: str | None,
         content: bytes,
+        organization_id: uuid.UUID | None = None,
     ) -> Document:
         """Ingest an uploaded PDF.
 
@@ -81,9 +112,9 @@ class DocumentService:
         ``PROCESSING`` to ``READY`` or ``FAILED``, committing at each
         transition for an accurate, debuggable status history.
         """
-        parent = await self.knowledge_source_repository.get(knowledge_source_id)
-        if parent is None:
-            raise NotFoundError("KnowledgeSource", knowledge_source_id)
+        await self._get_owned_knowledge_source(
+            knowledge_source_id, organization_id=organization_id
+        )
 
         saved = await self.pipeline.save_upload(
             filename=filename, content_type=content_type, content=content
@@ -129,8 +160,10 @@ class DocumentService:
 
         return document
 
-    async def delete_document(self, document_id: uuid.UUID) -> None:
-        document = await self.get_document(document_id)
+    async def delete_document(
+        self, document_id: uuid.UUID, *, organization_id: uuid.UUID | None = None
+    ) -> None:
+        document = await self.get_document(document_id, organization_id=organization_id)
         self.storage.delete(document.storage_path)
         self.storage.delete(document.extracted_text_path)
         await self.repository.delete(document)

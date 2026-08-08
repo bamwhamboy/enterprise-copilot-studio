@@ -10,6 +10,11 @@ client sent (or didn't) -- so a caller can no longer act as a different
 user by changing a request-body field. No other chat logic changed:
 this override happens here, at the API boundary, before the payload
 ever reaches ChatOrchestratorService.
+
+Tenant isolation follow-up: ``payload.organization_id`` is set the same
+way, from the authenticated user's own organization -- this is what
+lets ChatOrchestratorService resolve the requested copilot only within
+that organization (see app/services/chat_orchestrator.py).
 """
 
 import json
@@ -19,7 +24,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import ChatOrchestratorServiceDep
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.security.dependencies import CurrentUser
+from app.security.dependencies import CurrentUser, scoped_organization_id
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -29,6 +34,7 @@ async def chat(
     payload: ChatRequest, user: CurrentUser, service: ChatOrchestratorServiceDep
 ) -> ChatResponse:
     payload.user_id = str(user.id)
+    payload.organization_id = scoped_organization_id(user)
     return await service.handle_chat(payload)
 
 
@@ -37,6 +43,7 @@ async def chat_stream(
     payload: ChatRequest, user: CurrentUser, service: ChatOrchestratorServiceDep
 ) -> StreamingResponse:
     payload.user_id = str(user.id)
+    payload.organization_id = scoped_organization_id(user)
 
     async def event_source():
         async for event in service.handle_chat_stream(payload):

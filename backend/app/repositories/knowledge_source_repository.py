@@ -21,21 +21,36 @@ class KnowledgeSourceRepository(BaseRepository[KnowledgeSource]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_all(self, *, offset: int = 0, limit: int = 100) -> list[KnowledgeSource]:
+    async def list_all(
+        self, *, offset: int = 0, limit: int = 100, organization_id: uuid.UUID | None = None
+    ) -> list[KnowledgeSource]:
         stmt = (
             select(KnowledgeSource)
             .options(selectinload(KnowledgeSource.documents))
             .order_by(KnowledgeSource.created_at.desc())
-            .offset(offset)
-            .limit(limit)
         )
+        if organization_id is not None:
+            stmt = stmt.where(KnowledgeSource.organization_id == organization_id)
+        stmt = stmt.offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_many(self, ids: list[uuid.UUID]) -> list[KnowledgeSource]:
-        """Fetch multiple knowledge sources by id (used when attaching to a Copilot)."""
+    async def get_many(
+        self, ids: list[uuid.UUID], *, organization_id: uuid.UUID | None = None
+    ) -> list[KnowledgeSource]:
+        """Fetch multiple knowledge sources by id (used when attaching to a Copilot).
+
+        Silently drops any id belonging to a different organization
+        (when organization_id is given) rather than erroring -- the
+        caller only ever passes ids the user picked from their own,
+        already-scoped list_knowledge_sources() results, so this is a
+        defense against a spoofed id, not something a normal user
+        should ever actually hit.
+        """
         if not ids:
             return []
         stmt = select(KnowledgeSource).where(KnowledgeSource.id.in_(ids))
+        if organization_id is not None:
+            stmt = stmt.where(KnowledgeSource.organization_id == organization_id)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

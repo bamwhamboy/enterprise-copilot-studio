@@ -11,26 +11,35 @@ from fastapi import APIRouter, File, Form, Query, UploadFile, status
 
 from app.core.dependencies import DocumentServiceDep
 from app.schemas.document import DocumentCreate, DocumentRead
+from app.security.dependencies import CurrentUser, scoped_organization_id
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
 
 @router.get("", response_model=list[DocumentRead], summary="List documents")
 async def list_documents(
+    user: CurrentUser,
     service: DocumentServiceDep,
     knowledge_source_id: uuid.UUID | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[DocumentRead]:
     documents = await service.list_documents(
-        offset=offset, limit=limit, knowledge_source_id=knowledge_source_id
+        offset=offset,
+        limit=limit,
+        knowledge_source_id=knowledge_source_id,
+        organization_id=scoped_organization_id(user),
     )
     return [DocumentRead.model_validate(d) for d in documents]
 
 
 @router.get("/{document_id}", response_model=DocumentRead, summary="Get a document")
-async def get_document(document_id: uuid.UUID, service: DocumentServiceDep) -> DocumentRead:
-    document = await service.get_document(document_id)
+async def get_document(
+    document_id: uuid.UUID, user: CurrentUser, service: DocumentServiceDep
+) -> DocumentRead:
+    document = await service.get_document(
+        document_id, organization_id=scoped_organization_id(user)
+    )
     return DocumentRead.model_validate(document)
 
 
@@ -40,8 +49,12 @@ async def get_document(document_id: uuid.UUID, service: DocumentServiceDep) -> D
     status_code=status.HTTP_201_CREATED,
     summary="Create a document (JSON, no file)",
 )
-async def create_document(payload: DocumentCreate, service: DocumentServiceDep) -> DocumentRead:
-    document = await service.create_document(payload)
+async def create_document(
+    payload: DocumentCreate, user: CurrentUser, service: DocumentServiceDep
+) -> DocumentRead:
+    document = await service.create_document(
+        payload, organization_id=scoped_organization_id(user)
+    )
     return DocumentRead.model_validate(document)
 
 
@@ -52,6 +65,7 @@ async def create_document(payload: DocumentCreate, service: DocumentServiceDep) 
     summary="Upload a PDF document",
 )
 async def upload_document(
+    user: CurrentUser,
     service: DocumentServiceDep,
     knowledge_source_id: uuid.UUID = Form(...),
     file: UploadFile = File(...),
@@ -62,6 +76,7 @@ async def upload_document(
         filename=file.filename or "upload.pdf",
         content_type=file.content_type,
         content=content,
+        organization_id=scoped_organization_id(user),
     )
     return DocumentRead.model_validate(document)
 
@@ -71,5 +86,7 @@ async def upload_document(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a document",
 )
-async def delete_document(document_id: uuid.UUID, service: DocumentServiceDep) -> None:
-    await service.delete_document(document_id)
+async def delete_document(
+    document_id: uuid.UUID, user: CurrentUser, service: DocumentServiceDep
+) -> None:
+    await service.delete_document(document_id, organization_id=scoped_organization_id(user))

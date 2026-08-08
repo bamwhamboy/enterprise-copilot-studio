@@ -27,8 +27,8 @@ from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
 from app.guardrails.guardrails_runtime import GuardrailsRuntime
 from app.memory.conversation_memory_service import ConversationMemoryService
-from app.repositories.copilot_repository import CopilotRepository
 from app.schemas.chat import ChatRequest, ChatResponse, ChatStreamEvent
+from app.services.copilot_service import CopilotService
 
 logger = get_logger(__name__)
 
@@ -40,18 +40,25 @@ class ChatOrchestratorService:
         memory: ConversationMemoryService,
         guardrails: GuardrailsRuntime,
         workflow,
-        copilot_repository: CopilotRepository,
+        copilot_service: CopilotService,
     ) -> None:
         self._settings = settings
         self._memory = memory
         self._guardrails = guardrails
         self._workflow = workflow
-        self._copilots = copilot_repository
+        self._copilots = copilot_service
 
     async def _resolve_copilot_and_session(self, request: ChatRequest):
-        copilot = await self._copilots.get(request.copilot_id)
-        if copilot is None:
-            raise NotFoundError("Copilot", request.copilot_id)
+        # Tenant isolation: resolves the copilot only within the
+        # requesting user's own organization (organization_id is set at
+        # the API boundary in app/api/v1/chat.py, never client-trusted --
+        # same pattern as user_id). Reuses CopilotService.get_copilot's
+        # already-tested ownership check (404, not 403, for a copilot
+        # belonging to a different organization) rather than
+        # re-implementing the same check here.
+        copilot = await self._copilots.get_copilot(
+            request.copilot_id, organization_id=request.organization_id
+        )
 
         session = await self._memory.get_or_create_session(
             user_id=request.user_id,
@@ -61,8 +68,22 @@ class ChatOrchestratorService:
         return copilot, session
 
     def _resolve_knowledge_source_id(self, request: ChatRequest, copilot) -> str | None:
+        copilot_source_ids = {str(ks.id) for ks in copilot.knowledge_sources}
         if request.knowledge_source_id:
-            return str(request.knowledge_source_id)
+            requested = str(request.knowledge_source_id)
+            # A client-supplied knowledge_source_id must actually be one
+            # of this copilot's own attached sources -- without this
+            # check, a client could chat against a copilot they legitimately
+            # own but supply an arbitrary knowledge_source_id belonging to
+            # a different organization, and retrieval would search that
+            # organization's content. CopilotService.get_many already
+            # guarantees a copilot's attached sources all belong to its
+            # own organization (see app/services/copilot_service.py), so
+            # checking membership in that set is sufficient here without
+            # a second organization lookup.
+            if requested not in copilot_source_ids:
+                raise NotFoundError("KnowledgeSource", request.knowledge_source_id)
+            return requested
         if copilot.knowledge_sources:
             # Default to the copilot's first linked source when the caller
             # doesn't specify one -- a reasonable default, not a hard rule.
