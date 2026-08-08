@@ -28,7 +28,11 @@ from app.knowledge_engine.chunking.hierarchical_chunker import HierarchicalChunk
 from app.knowledge_engine.compression.compression_service import ContextCompressionService
 from app.knowledge_engine.embeddings.embedding_model import build_embedding_model
 from app.knowledge_engine.indexing.indexing_service import IndexingService
-from app.knowledge_engine.indexing.vector_store import build_qdrant_client, build_vector_store
+from app.knowledge_engine.indexing.vector_store import (
+    build_qdrant_client,
+    build_vector_store,
+    ensure_collection_ready,
+)
 from app.knowledge_engine.pipeline.ingestion_pipeline import DocumentIngestionPipeline
 from app.repositories.organization_repository import OrganizationRepository, RoleRepository
 from app.services.auth_service import AuthService
@@ -166,7 +170,9 @@ _embed_model: BaseEmbedding | None = None
 async def get_qdrant_client(settings: SettingsDep) -> QdrantClient:
     global _qdrant_client
     if _qdrant_client is None:
-        _qdrant_client = build_qdrant_client(settings)
+        client = build_qdrant_client(settings)
+        ensure_collection_ready(client, settings)
+        _qdrant_client = client
     return _qdrant_client
 
 
