@@ -8,8 +8,8 @@ Hybrid retrieval-augmented generation · LangGraph orchestration · Multi-tenant
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black)](frontend/README.md)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688)](backend/README.md)
-[![LangGraph](https://img.shields.io/badge/LangGraph-orchestration-1C3C3C)](backend/README.md#enterprise-ai-runtime-sprint-5)
-[![Qdrant](https://img.shields.io/badge/Qdrant-vector%20search-DC244C)](backend/README.md#enterprise-retrieval-engine-sprint-3b)
+[![LangGraph](https://img.shields.io/badge/LangGraph-orchestration-1C3C3C)](backend/README.md#architecture)
+[![Qdrant](https://img.shields.io/badge/Qdrant-vector%20search-DC244C)](backend/README.md#tech-stack)
 [![License](https://img.shields.io/badge/license-unspecified-lightgrey)](#license)
 
 [Live Demo](#) · [Backend Setup](backend/README.md) · [Frontend Setup](frontend/README.md) · [Architecture](#architecture)
@@ -27,48 +27,68 @@ Hybrid retrieval-augmented generation · LangGraph orchestration · Multi-tenant
 > automatically. See [Getting Started](#getting-started) below to spin up
 > the full stack yourself instead.
 
-## Screenshots
+## Demo Video
 
-> _Add real screenshots here as the project evolves — a `docs/screenshots/`
-> folder with a few PNGs (Dashboard, Copilot chat with citations, the
-> Create Copilot wizard, Knowledge Sources) makes this section land far
-> better than any amount of description below could. Suggested layout:_
-
-| Dashboard | Copilot Chat |
-|---|---|
-| _docs/screenshots/dashboard.png_ | _docs/screenshots/chat.png_ |
-
-| Create Copilot Wizard | Knowledge Sources |
-|---|---|
-| _docs/screenshots/wizard.png_ | _docs/screenshots/knowledge-sources.png_ |
+> _Drop the video in here — on GitHub, the easiest way is to open this
+> file in the web editor and drag the video file directly into the
+> text area; GitHub uploads it and inserts a working embed link
+> automatically. A short GIF of the chat-with-citations moment above
+> the video is a nice touch too, but not required._
 
 ## Overview
 
-Enterprise Copilot Studio is a full-stack platform for building
-retrieval-grounded AI assistants without writing RAG infrastructure from
-scratch. A user creates an account (each gets an isolated workspace),
-uploads documents into a knowledge source, composes a copilot around it
-through a guided wizard, and starts chatting — with every answer citing
-the specific document and page it came from.
+Most companies have mountains of internal documents — HR policies,
+legal contracts, product manuals, onboarding guides — and no easy way
+for employees to actually get answers from them. People either dig
+through PDFs themselves or ping a coworker and wait.
 
-The project was built to demonstrate what a *production* AI platform
-actually requires beyond "call an LLM API": hierarchical document
-chunking, hybrid dense + sparse retrieval, guardrails and PII masking,
-JWT authentication with refresh-token rotation, multi-tenant data
-isolation, and the operational realities of running all of that on
-real, memory-constrained infrastructure.
+Enterprise Copilot Studio solves that: it lets any organization turn
+its own documents into a chatbot that actually knows the material.
+Upload an HR policy, and employees can ask "how many sick days do I
+get?" and get a real answer — with a citation pointing to the exact
+document and section it came from, so nobody has to just trust the AI
+blindly.
 
-**Two things worth knowing up front:**
-- **Nothing here is a mock.** Registration, authentication, document
-  indexing, retrieval, and chat all run against real infrastructure —
-  PostgreSQL, Qdrant, and a real LLM provider — not stubbed data. Where
-  something genuinely isn't built yet (a few roadmap features below), the
-  UI says "Coming Soon" rather than pretending otherwise.
-- **This shipped through real production incidents, not just local
-  development.** The backend README documents an actual out-of-memory
-  crash investigation on a constrained hosting tier, root-caused,
-  fixed, and eventually resolved by migrating platforms — see
-  [Engineering Highlights](#engineering-highlights) below.
+Each company that signs up gets its own private, isolated space —
+nobody can see another organization's copilots, documents, or
+conversations. Registration is instant and self-service: sign up, and
+you're building your own AI assistant in minutes, no admin setup
+required.
+
+Under the hood, it's a full-stack platform for building
+retrieval-grounded AI assistants without writing RAG infrastructure
+from scratch: hierarchical document chunking, hybrid dense + sparse
+retrieval, guardrails and PII masking, JWT authentication with
+refresh-token rotation, and multi-tenant data isolation, all running on
+real, memory-constrained infrastructure rather than a local-only demo.
+
+## What Makes It Stand Out
+
+**It doesn't make things up — it shows its work.** Every answer comes
+with a confidence score and a citation back to the exact source
+document. If the copilot doesn't know something, it says so, instead
+of guessing.
+
+**It's a real, working product — not a demo that only runs on one
+laptop.** It's live on the internet right now, with a real database, a
+real vector search engine, and real AI providers behind it. Anyone can
+register and try it.
+
+**Every company's data is genuinely private.** This wasn't an
+afterthought — it's built in at every layer, so one organization's
+documents, copilots, and chats are never visible to another, even by
+accident.
+
+**It survived real problems, not just a tutorial's happy path.**
+Building this meant hitting genuine production issues — the app
+running out of memory, a security gap that let one company briefly see
+another's data — and actually fixing them, the same way a real
+engineering team would. See [Engineering Highlights](#engineering-highlights)
+below for the specifics.
+
+**It's flexible by design.** It isn't locked into one AI provider — it
+can run on Groq, OpenAI, Anthropic, or others, so it's never dependent
+on a single company's model.
 
 ## Key Features
 
@@ -107,38 +127,7 @@ real, memory-constrained infrastructure.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    User(["User's Browser"])
-
-    subgraph Vercel["Vercel"]
-        FE["Next.js 15 / React 19"]
-    end
-
-    subgraph Railway["Railway"]
-        API["FastAPI"]
-        subgraph Workflow["LangGraph — 5-node chat workflow"]
-            direction TB
-            Planner["Planner"] --> Retrieval["Hybrid Retrieval\n(dense + BM25 + rerank)"]
-            Retrieval --> Context["Context Builder"]
-            Context --> Gen["Response Generator"]
-            Gen --> Cite["Citation Builder"]
-        end
-        API --> Workflow
-    end
-
-    subgraph External["Managed Services"]
-        PG[("PostgreSQL\n(Render)")]
-        QD[("Qdrant Cloud\nvector search")]
-        LLM["LiteLLM Gateway\n→ Groq / OpenAI / Anthropic / ..."]
-    end
-
-    User --> FE
-    FE -- "HTTPS / JWT" --> API
-    API --> PG
-    Retrieval --> QD
-    Gen --> LLM
-```
+![Architecture diagram](docs/architecture-diagram.svg)
 
 A chat turn flows: **input guardrails** → orchestrator resolves the
 copilot and loads windowed conversation history → the **LangGraph
@@ -150,9 +139,9 @@ content → both turns are persisted.
 
 The database, vector store, and API are deliberately three separate
 managed services rather than one bundled deployment — see the backend
-README's [Production Deployment](backend/README.md#production-deployment-vector-store--redis)
-section for exactly why, including a real production incident that
-shaped this decision.
+README's [Deployment](backend/README.md#deployment) section for setup
+steps, and its [engineering log](backend/docs/ENGINEERING_LOG.md) for
+the real production incident that shaped this decision.
 
 ## Tech Stack
 
@@ -164,7 +153,7 @@ shaped this decision.
 | **Data** | PostgreSQL · Qdrant (vector search) |
 | **Auth** | JWT (PyJWT) · bcrypt · role-based access control |
 | **Infra** | Docker · Vercel (frontend) · Railway (API) · Render (PostgreSQL) · Qdrant Cloud |
-| **Testing** | pytest / pytest-asyncio (backend, 123 tests) · TypeScript strict mode + production build verification (frontend) |
+| **Testing** | pytest / pytest-asyncio (backend, 150 tests) · TypeScript strict mode + production build verification (frontend) |
 
 ## Repository Structure
 
@@ -206,7 +195,8 @@ the feature list:
 - **A real production incident, root-caused and resolved.** Indexing
   began failing in production with no traceback — just the process
   getting killed. That investigation is documented start to finish in
-  the backend README: tracing it to PyTorch's own import overhead,
+  the backend's [engineering log](backend/docs/ENGINEERING_LOG.md):
+  tracing it to PyTorch's own import overhead,
   replacing the embedding runtime with ONNX-based inference, discovering
   and fixing a *second*, unrelated cause (200MB of eagerly-imported chat
   dependencies loaded even for requests that never touched chat), and a
@@ -235,7 +225,7 @@ the feature list:
 
 ```bash
 # Backend
-cd backend && pytest -v          # 123 tests
+cd backend && pytest -v          # 150 tests
 
 # Frontend
 cd frontend && npm run build     # type-checked + production build
