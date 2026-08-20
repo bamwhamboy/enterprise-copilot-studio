@@ -39,6 +39,17 @@ from app.guardrails.guardrails_runtime import GuardrailsRuntime
 from app.llm.gateway import LLMGateway
 from app.llm.models import GenerationRequest
 
+import re
+
+
+def _sanitize_llm_output(text: str) -> str:
+    """Strip HTML artifacts the model occasionally produces inside
+    markdown tables (e.g. <br> as its own workaround for a multi-line
+    table cell), which most frontend markdown renderers correctly
+    refuse to execute as real line breaks -- so it shows up as literal
+    text instead."""
+    return re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+
 
 def make_response_generator_node(
     settings: Settings, gateway: LLMGateway, guardrails: GuardrailsRuntime
@@ -62,7 +73,7 @@ def make_response_generator_node(
                 accumulated += chunk.delta
                 writer({"delta": chunk.delta})
 
-        safe_text = guardrails.enforce_output(accumulated)
+        safe_text = guardrails.enforce_output(_sanitize_llm_output(accumulated))
         return {"response_text": safe_text}
 
     return response_generator_node
