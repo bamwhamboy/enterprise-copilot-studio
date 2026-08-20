@@ -14,6 +14,7 @@ from app.api.v1 import (
     chunks,
     copilots,
     documents,
+    document_intelligence,
     health,
     index,
     knowledge_sources,
@@ -37,6 +38,7 @@ v1_router.include_router(roles.router)
 v1_router.include_router(copilots.router)
 v1_router.include_router(knowledge_sources.router)
 v1_router.include_router(documents.router)
+v1_router.include_router(document_intelligence.router)
 v1_router.include_router(index.router)
 v1_router.include_router(search.router)
 v1_router.include_router(chunks.router)
