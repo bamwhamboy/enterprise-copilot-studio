@@ -3,17 +3,19 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, CheckCircle2, FileText, Loader2, Sparkles, Trash2 } from "lucide-react";
 
 import { knowledgeSourcesApi } from "@/lib/api/knowledge-sources";
 import { documentsApi } from "@/lib/api/documents";
 import { invalidateKnowledgeData } from "@/lib/query-invalidation";
+import type { DocumentClassificationResponse } from "@/types/document-classification";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DocumentDropzone } from "@/components/knowledge-sources/document-dropzone";
+import { CopilotRecommendationCard } from "@/components/knowledge-sources/copilot-recommendation-card";
 import {
   ProcessingStatusBadge,
   IndexStatusBadge,
@@ -27,19 +29,21 @@ interface UploadTask {
   errorMessage?: string;
 }
 
+interface DocumentRecommendation {
+  documentId: string;
+  documentName: string;
+  result: DocumentClassificationResponse;
+}
+
 export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [uploads, setUploads] = useState<UploadTask[]>([]);
+  const [recommendations, setRecommendations] = useState<DocumentRecommendation[]>([]);
 
   const { data: source, isLoading } = useQuery({
     queryKey: ["knowledge-source", knowledgeSourceId],
     queryFn: () => knowledgeSourcesApi.get(knowledgeSourceId),
-    // Poll while anything is mid-flight (upload just landed, still being
-    // parsed, or actively indexing) so the list updates itself the moment
-    // a document finishes -- no manual refresh required. Stops polling
-    // automatically once every document is in a terminal state
-    // (READY+INDEXED or FAILED).
     refetchInterval: (query) => {
       const documents = query.state.data?.documents ?? [];
       const hasInFlightDocument = documents.some(
@@ -61,6 +65,7 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
 
   async function handleFilesSelected(files: File[]) {
     let anySucceeded = false;
+    let anyRecommendationShown = false;
 
     for (const file of files) {
       const taskId = `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -85,6 +90,21 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
         setUploads((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: "done" } : t)));
         invalidateKnowledgeData(queryClient, knowledgeSourceId);
         anySucceeded = true;
+
+        try {
+          const classification = await knowledgeSourcesApi.classifyDocument(document.id);
+          setRecommendations((prev) => [
+            ...prev,
+            {
+              documentId: document.id,
+              documentName: document.original_filename || document.name,
+              result: classification,
+            },
+          ]);
+          anyRecommendationShown = true;
+        } catch (classifyErr) {
+          console.warn("Smart Copilot classification failed for", document.id, classifyErr);
+        }
       } catch (err) {
         const message = (err as { message?: string })?.message ?? "Upload failed.";
         setUploads((prev) =>
@@ -93,12 +113,13 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
       }
     }
 
-    if (anySucceeded) {
-      // Brief pause so the user sees the "Indexed" confirmation before
-      // leaving, then return to the list -- counts are already fresh
-      // (invalidateKnowledgeData above), no manual Back/refresh needed.
+    if (anySucceeded && !anyRecommendationShown) {
       setTimeout(() => router.push("/knowledge-sources"), 1200);
     }
+  }
+
+  function handleDismissRecommendation(documentId: string) {
+    setRecommendations((prev) => prev.filter((r) => r.documentId !== documentId));
   }
 
   async function handleIndexNow(documentId: string) {
@@ -153,9 +174,7 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
                 >
                   <FileText className="size-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-foreground">
-                      {task.file.name}
-                    </p>
+                    <p className="truncate text-xs font-medium text-foreground">{task.file.name}</p>
                     {task.status === "uploading" && (
                       <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
                         <div
@@ -196,13 +215,22 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
         </CardContent>
       </Card>
 
+      <AnimatePresence>
+        {recommendations.map((recommendation) => (
+          <CopilotRecommendationCard
+            key={recommendation.documentId}
+            documentName={recommendation.documentName}
+            result={recommendation.result}
+            onDismiss={() => handleDismissRecommendation(recommendation.documentId)}
+          />
+        ))}
+      </AnimatePresence>
+
       {source.documents.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center gap-2 py-16 text-center">
             <p className="text-sm font-medium text-foreground">No documents yet</p>
-            <p className="text-xs text-muted-foreground">
-              Upload a PDF above to get started.
-            </p>
+            <p className="text-xs text-muted-foreground">Upload a PDF above to get started.</p>
           </CardContent>
         </Card>
       ) : (

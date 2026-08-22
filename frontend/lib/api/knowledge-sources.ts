@@ -5,6 +5,7 @@ import type {
   ApiKnowledgeSource,
   KnowledgeSourceCreatePayload,
 } from "@/types/knowledge-source";
+import type { DocumentClassificationResponse } from "@/types/document-classification";
 
 /**
  * Real upload progress requires XMLHttpRequest -- fetch() has no upload
@@ -65,5 +66,14 @@ export const knowledgeSourcesApi = {
   indexDocument: (documentId: string) =>
     apiClient.post<{ document_id: string; chunks_indexed: number; index_status: string }>(
       `/index/${documentId}`
+    ),
+  /**
+   * V2 Smart Copilot Recommendation: classify an already-uploaded document
+   * server-side by id. The backend reads the document's extracted text, so
+   * the frontend does not need to send potentially large document content.
+   */
+  classifyDocument: (documentId: string) =>
+    apiClient.post<DocumentClassificationResponse>(
+      `/document-intelligence/classify-document/${documentId}`
     ),
 };
