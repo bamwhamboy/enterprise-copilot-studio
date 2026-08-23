@@ -94,7 +94,7 @@ def build_embedding_model(settings: Settings) -> BaseEmbedding:
             # conservative increase from the old Render-tuned value of 4
             # and measure production embedding latency before considering
             # a further increase.
-            embed_batch_size=8,
+            embed_batch_size=4,
         )
     except Exception:
         logger.exception(
