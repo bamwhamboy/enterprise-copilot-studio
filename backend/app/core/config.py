@@ -88,12 +88,10 @@ class Settings(BaseSettings):
     # specify an override. Nothing in this codebase calls a model with them
     # yet — Sprint 4 builds only the routing/config layer.
     DEFAULT_LLM_PROVIDER: Literal["groq", "openai", "azure_openai", "anthropic"] = "groq"
-    # llama-3.3-70b-versatile: a current Groq "Production Model" as of this
-    # writing (confirmed live against https://console.groq.com/docs/models
-    # -- not a placeholder). Production models are Groq's designation for
-    # ones meeting their speed/quality/reliability bar for production use;
-    # see Groq's deprecation docs before assuming any model id is permanent.
-    DEFAULT_LLM_MODEL: str = "llama-3.3-70b-versatile"
+    # GPT-OSS 120B is the current Groq replacement for the retired
+    # llama-3.3-70b-versatile model. Keep the model ID configurable through
+    # the environment so it can be changed without a code change if needed.
+    DEFAULT_LLM_MODEL: str = "openai/gpt-oss-120b"
     DEFAULT_TEMPERATURE: float = 0.2
     DEFAULT_MAX_TOKENS: int = 1024
 
