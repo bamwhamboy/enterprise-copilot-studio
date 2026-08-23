@@ -5,9 +5,9 @@ Builds a LlamaIndex ``BaseEmbedding`` for ``BAAI/bge-small-en-v1.5`` via
 
 This replaced an earlier ``HuggingFaceEmbedding`` (sentence-transformers
 + torch) implementation after confirming in production (Render logs) that
-it was exceeding a 512MB instance's memory limit and getting SIGKILLed by
-the OS during model loading. The dominant memory cost there was PyTorch's
-own import/runtime overhead (300-500MB+, independent of any model size)
+it was exceeding a 512MB instance's memory limit and getting SIGKILLed by the
+OS during model loading. The dominant memory cost there was PyTorch's own
+import/runtime overhead (300-500MB+, independent of any model size)
 -- not the embedding model itself, which was already one of the smaller
 BGE variants. Swapping the runtime (ONNX Runtime instead of PyTorch)
 while keeping the *same* model addresses that directly: confirmed via a
@@ -60,15 +60,12 @@ def _peak_rss_mb() -> float:
     version of this module: even with the much lighter fastembed/ONNX
     Runtime stack, logging peak RSS around model loading is still the
     fastest way to confirm actual memory headroom on a given deployment
-    tier, and remains the only way to distinguish an OOM kill (a
-    SIGKILL from the OS, uncatchable by any try/except) from a normal
-    Python-catchable failure after the fact: if this is the last line
+    tier, and remains the only way to distinguish an OOM kill (a SIGKILL
+    from the OS, uncatchable by any try/except) from a normal Python
+    catchable failure after the fact: if this is the last line
     in the logs with nothing after it, that's the signature of the
     former, not the latter.
     """
-    # ru_maxrss is KB on Linux, bytes on macOS -- this service only ever
-    # runs on Linux (the Dockerfile's runtime is python:3.12-slim), so
-    # no platform branching needed here.
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
@@ -84,37 +81,8 @@ def build_embedding_model(settings: Settings) -> BaseEmbedding:
         _peak_rss_mb(),
     )
     try:
-        # Deliberately imported here, inside the try block, not at
-        # module level or before this point -- an earlier version of
-        # this function had the equivalent import before the
-        # try/except, so an import-time failure (missing/corrupt
-        # package, not just a runtime construction failure) would have
-        # bypassed this logging entirely. Confirmed by testing at the
-        # time: moving it fixed a real gap, not a hypothetical one.
         from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
-        # ONNX Runtime tuning for a memory-constrained deployment (Render's
-        # 512MB tier), verified by inspecting fastembed's own model-loading
-        # source (fastembed.common.onnx_model.OnnxModel._load_onnx_model):
-        #   - threads=1: without this, onnxruntime auto-detects thread count
-        #     from the host's visible CPU count, which on a container with a
-        #     cgroup CPU limit can be higher than what's actually usable --
-        #     each extra thread carries its own working-memory buffers for
-        #     no real throughput benefit at this scale.
-        #   - enable_cpu_mem_arena / enable_mem_pattern: both True by
-        #     default. This is a well-documented ONNX Runtime behavior: the
-        #     arena allocator grows a memory pool and *holds onto it* for
-        #     reuse across calls rather than releasing it back, which is the
-        #     right tradeoff for high-throughput serving and the wrong one
-        #     for a single occasional indexing request on a tight memory
-        #     budget. Disabling both trades a little latency for
-        #     meaningfully lower, more predictable peak memory.
-        # Confirmed these are accepted, real parameters (not silently
-        # ignored) by inspecting FastEmbedEmbedding.__init__ -> TextEmbedding
-        # -> OnnxModel._load_onnx_model's actual source, and empirically:
-        # constructing with these kwargs proceeds past pydantic validation
-        # to the (network-dependent) model download step, rather than
-        # failing on an unrecognized argument.
         model = FastEmbedEmbedding(
             model_name=settings.EMBEDDING_MODEL_NAME,
             threads=1,
@@ -122,28 +90,13 @@ def build_embedding_model(settings: Settings) -> BaseEmbedding:
                 "enable_cpu_mem_arena": False,
                 "enable_mem_pattern": False,
             },
-            # Smaller than BaseEmbedding's own default (10): hierarchical
-            # chunks can be as large as 2048 tokens (the top level of
-            # CHUNK_SIZES), so a batch of 10 could mean up to ~20K tokens
-            # processed in a single inference call. 4 bounds that per-call
-            # peak while still batching more than one chunk at a time.
-            embed_batch_size=4,
+            # Cloud Run has 1 GiB available to this service. Start with a
+            # conservative increase from the old Render-tuned value of 4
+            # and measure production embedding latency before considering
+            # a further increase.
+            embed_batch_size=8,
         )
     except Exception:
-        # This is the actual point of failure the original version of
-        # this module (before either exception-handling pass) had zero
-        # exception handling around -- and nothing calling it
-        # (IndexingService.index_document's own try/except included)
-        # can catch a failure here either, because this runs during
-        # FastAPI dependency resolution, *before* that try/except block
-        # even exists yet (see app/core/dependencies.py
-        # get_indexing_service -> EmbedModelDep -> get_embed_model ->
-        # this function, all resolved before the endpoint body runs).
-        # logger.exception (not logger.error) is deliberate: it
-        # includes the full traceback, not just the exception's string
-        # message, which is what actually distinguishes "network error
-        # downloading the model" from "corrupt cache" from "out of disk
-        # space" etc. in the logs.
         logger.exception(
             "Failed to load embedding model %s (peak RSS at failure: %.0f MB). "
             "If nothing appears after this in the logs, the process was "
