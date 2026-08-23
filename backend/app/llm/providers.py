@@ -37,11 +37,6 @@ from app.llm.models import (
 
 logger = get_logger(__name__)
 
-# LiteLLM identifies a provider by prefixing the model string, e.g.
-# "groq/llama-3.1-70b-versatile" or "anthropic/claude-3-5-sonnet-latest".
-# OpenAI models need no prefix. This is the *only* place provider-specific
-# string formatting happens -- everything else in the app deals in our own
-# LLMProvider enum and plain model names.
 _LITELLM_PREFIXES: dict[LLMProvider, str] = {
     LLMProvider.OPENAI: "",
     LLMProvider.GROQ: "groq/",
@@ -63,21 +58,20 @@ class ProviderConfig:
 
 
 def to_litellm_model(provider: LLMProvider, model: str) -> str:
-    """Build the LiteLLM-format model string for a (provider, model) pair.
+    """Build the LiteLLM model string for a provider/model pair.
 
-    Idempotent: if `model` already carries a provider prefix, it's
-    returned unchanged rather than double-prefixed.
+    A model may itself contain a slash, for example Groq's
+    ``openai/gpt-oss-120b`` model identifier. That slash does not mean the
+    provider prefix is already present. We therefore only skip prefixing
+    when the model already starts with the expected provider prefix.
     """
-    if "/" in model:
+    prefix = _LITELLM_PREFIXES[provider]
+    if not prefix or model.startswith(prefix):
         return model
-    return f"{_LITELLM_PREFIXES[provider]}{model}"
+    return f"{prefix}{model}"
 
 
 def _messages_to_dicts(messages: list[LLMMessage]) -> list[dict[str, str]]:
-    # LiteLLM (like every OpenAI-compatible API) has no "developer" role
-    # distinct from "system" -- Sprint 4's Prompt Engine models it
-    # separately for template organization, but on the wire both are
-    # sent as "system" messages, in order.
     return [
         {"role": "system" if m.role == "developer" else m.role, "content": m.content}
         for m in messages
@@ -85,19 +79,12 @@ def _messages_to_dicts(messages: list[LLMMessage]) -> list[dict[str, str]]:
 
 
 class LiteLLMProviderClient:
-    """Shared LiteLLM-backed implementation of generate()/stream().
-
-    Subclassed once per provider purely for clear naming/typing at call
-    sites (OpenAIProviderClient vs. GroqProviderClient, etc.) -- the
-    actual call logic is identical; only self.config (and thus the
-    LiteLLM model prefix / api_base / api_key) differs.
-    """
+    """Shared LiteLLM-backed implementation of generate()/stream()."""
 
     def __init__(self, config: ProviderConfig) -> None:
         self.config = config
 
     def health(self) -> ProviderHealth:
-        """Report configuration readiness. Makes no network calls."""
         message = (
             f"{self.config.provider.value} is configured."
             if self.config.configured
@@ -125,17 +112,14 @@ class LiteLLMProviderClient:
         return kwargs
 
     async def generate(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate a single completion via LiteLLM."""
         kwargs = self._call_kwargs(request)
         logger.info(
             "LiteLLM generate() [request_id=%s model=%s]", request.request_id, kwargs["model"]
         )
         response = await litellm.acompletion(**kwargs)
-
         choice = response.choices[0]
         content = choice.message.content or ""
         usage = getattr(response, "usage", None)
-
         return GenerationResponse(
             content=content,
             provider=self.config.provider,
@@ -148,14 +132,12 @@ class LiteLLMProviderClient:
         )
 
     async def stream(self, request: GenerationRequest) -> AsyncIterator[StreamChunk]:
-        """Stream a completion chunk by chunk via LiteLLM."""
         kwargs = self._call_kwargs(request)
         kwargs["stream"] = True
         logger.info(
             "LiteLLM stream() [request_id=%s model=%s]", request.request_id, kwargs["model"]
         )
         model = request.model or self.config.default_model
-
         response_stream = await litellm.acompletion(**kwargs)
         async for chunk in response_stream:
             delta = chunk.choices[0].delta
@@ -189,7 +171,6 @@ class OllamaProviderClient(LiteLLMProviderClient):
     """Ollama (local/self-hosted) provider client, via LiteLLM."""
 
 
-# Kept as the shared base type name other modules (gateway.py) import.
 BaseLLMProviderClient = LiteLLMProviderClient
 
 
@@ -203,7 +184,6 @@ _CLIENT_CLASSES: dict[LLMProvider, type[LiteLLMProviderClient]] = {
 
 
 def build_provider_configs(settings: Settings) -> dict[LLMProvider, ProviderConfig]:
-    """Derive one ProviderConfig per supported provider from Settings."""
     return {
         LLMProvider.OPENAI: ProviderConfig(
             provider=LLMProvider.OPENAI,
@@ -240,15 +220,11 @@ def build_provider_configs(settings: Settings) -> dict[LLMProvider, ProviderConf
             api_key=None,
             base_url=settings.OLLAMA_BASE_URL,
             default_model="llama3",
-            # Ollama is a local/self-hosted server, not an API-key-gated
-            # SaaS -- "configured" means reachable-in-principle (a base
-            # URL is set), not "has credentials".
             configured=bool(settings.OLLAMA_BASE_URL),
         ),
     }
 
 
 def build_provider_clients(settings: Settings) -> dict[LLMProvider, LiteLLMProviderClient]:
-    """Build one client instance per provider, wired to its derived config."""
     configs = build_provider_configs(settings)
     return {provider: _CLIENT_CLASSES[provider](config) for provider, config in configs.items()}
