@@ -5,15 +5,6 @@ All runtime configuration is centralized here as a single, strongly-typed
 ``.env`` file). Nothing outside this module should read ``os.environ``
 directly — this keeps configuration auditable and easy to override in
 tests, Docker, and CI.
-
-Settings are grouped by concern:
-
-* Application  — service identity, environment, debug flags
-* API          — host/port/prefix/CORS
-* Database     — PostgreSQL connection (used now, via SQLAlchemy)
-* Future AI services — Redis, Qdrant, and LLM gateway connection details.
-  These fields exist so the app is *configured* for upcoming phases, but
-  no code in this phase actually connects to or calls these services.
 """
 
 from functools import lru_cache
@@ -47,8 +38,6 @@ class Settings(BaseSettings):
     PORT: int = 8000
     API_V1_PREFIX: str = "/api/v1"
     # Comma-separated list of allowed origins, e.g. "http://localhost:3000,https://app.example.com".
-    # Stored as a plain string (not list[str]) because pydantic-settings expects
-    # list-typed env values to be JSON, which is awkward to hand-author in a .env file.
     CORS_ORIGINS: str = "http://localhost:3000"
 
     @computed_field  # type: ignore[prop-decorator]
@@ -62,8 +51,7 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = 5
     DATABASE_ECHO: bool = False
 
-    # --- Future AI services (configured, not yet used in code) -------------
-    # Populated so the platform is ready to wire these in a later phase.
+    # --- AI services --------------------------------------------------------
     REDIS_URL: str | None = "redis://localhost:6379/0"
     QDRANT_URL: str | None = "http://localhost:6333"
     QDRANT_API_KEY: str | None = None
@@ -77,31 +65,29 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str | None = "http://localhost:11434"
 
     # --- Knowledge ingestion (Sprint 3A) -------------------------------------
-    # Base directory (relative to the process working directory, or absolute)
-    # where uploaded documents and their extracted text are stored.
     STORAGE_DIR: str = "storage/documents"
     MAX_UPLOAD_SIZE_MB: int = 25
 
-    # --- LLM defaults (Sprint 4 — AI infrastructure, no calls made) ---------
-    # These are the defaults the LLM Gateway (app/llm/gateway.py) and
-    # Prompt Engine (app/prompt_engine/) fall back to when a caller doesn't
-    # specify an override. Nothing in this codebase calls a model with them
-    # yet — Sprint 4 builds only the routing/config layer.
+    # --- LLM defaults (Sprint 4/5) ------------------------------------------
     DEFAULT_LLM_PROVIDER: Literal["groq", "openai", "azure_openai", "anthropic"] = "groq"
-    # GPT-OSS 120B is the current Groq replacement for the retired
-    # llama-3.3-70b-versatile model. Keep the model ID configurable through
-    # the environment so it can be changed without a code change if needed.
     DEFAULT_LLM_MODEL: str = "openai/gpt-oss-120b"
     DEFAULT_TEMPERATURE: float = 0.2
     DEFAULT_MAX_TOKENS: int = 1024
+
+    # --- Online response evaluation / hallucination guardrail ----------------
+    # W&B Weave traces the judge and stores evaluation results. The evaluator
+    # model is deliberately configurable because judge quality/cost should be
+    # independently tunable from the generation model.
+    WANDB_API_KEY: str | None = None
+    WEAVE_PROJECT: str = "enterprise-copilot-studio"
+    RESPONSE_EVALUATION_ENABLED: bool = True
+    RESPONSE_EVALUATOR_MODEL: str = "groq/openai/gpt-oss-20b"
+    RESPONSE_MAX_EVALUATION_ATTEMPTS: int = 2
 
     # --- Enterprise Hybrid Hierarchical RAG (Sprint 3B) -----------------------
     QDRANT_COLLECTION_NAME: str = "knowledge_chunks"
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
     EMBEDDING_DIMENSION: int = 384
-    # Hierarchical chunking sizes, largest (document/section) to smallest
-    # (paragraph), in tokens — passed straight to LlamaIndex's
-    # HierarchicalNodeParser.
     CHUNK_SIZES: list[int] = Field(default_factory=lambda: [2048, 512, 128])
     HYBRID_SEMANTIC_TOP_K: int = 10
     HYBRID_BM25_TOP_K: int = 10
@@ -118,11 +104,6 @@ class Settings(BaseSettings):
     RAG_RERANK_ENABLED: bool = True
 
     # --- Authentication & Authorization (Sprint 6) ---------------------------
-    # No default for the signing secret in any real environment -- .env.example
-    # documents this and README instructions say to generate a real one.
-    # Falls back to a fixed dev-only value ONLY so the app/tests can boot
-    # without every contributor generating a secret first; never use this
-    # value outside local development.
     JWT_SECRET_KEY: str = "dev-only-insecure-secret-change-me"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
@@ -131,10 +112,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return a cached ``Settings`` instance.
-
-    ``lru_cache`` ensures environment variables are read once per process,
-    while still allowing dependency-injected overrides in tests via
-    ``app.dependency_overrides``.
-    """
+    """Return a cached ``Settings`` instance."""
     return Settings()
