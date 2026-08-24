@@ -1,11 +1,8 @@
 """Chat workflow.
 
-Wires the five specialized nodes (planner, retrieval, context builder,
-response generator, citation builder) into a single LangGraph
-StateGraph. Deliberately linear for this sprint — the graph structure
-is what makes adding branches later (a tool-use node, a re-planning
-loop, parallel retrieval strategies) a matter of adding nodes/edges,
-not refactoring this function or any caller.
+Wires the chat pipeline into a linear LangGraph StateGraph. Response
+quality evaluation is performed inside the response generator so an
+unchecked draft is never emitted to the caller.
 """
 
 from __future__ import annotations
@@ -19,6 +16,7 @@ from app.agents.response_generator_node import make_response_generator_node
 from app.agents.retrieval_node import make_retrieval_node
 from app.agents.state import ChatState
 from app.core.config import Settings
+from app.evaluation.response_evaluator import ResponseEvaluator
 from app.guardrails.guardrails_runtime import GuardrailsRuntime
 from app.knowledge_engine.compression.compression_service import ContextCompressionService
 from app.knowledge_engine.retrieval.hybrid_retriever import HybridRetriever
@@ -34,14 +32,16 @@ def build_chat_workflow(
     gateway: LLMGateway,
     guardrails: GuardrailsRuntime,
 ):
-    """Compile the chat LangGraph workflow, wired with all runtime dependencies."""
+    """Compile the chat LangGraph workflow with the online response evaluator."""
+    evaluator = ResponseEvaluator(settings)
     graph = StateGraph(ChatState)
 
     graph.add_node("planner", planner_node)
     graph.add_node("retrieval", make_retrieval_node(settings, retriever, compression))
     graph.add_node("context_builder", make_context_builder_node(renderer))
     graph.add_node(
-        "response_generator", make_response_generator_node(settings, gateway, guardrails)
+        "response_generator",
+        make_response_generator_node(settings, gateway, guardrails, evaluator),
     )
     graph.add_node("citation_builder", citation_builder_node)
 
