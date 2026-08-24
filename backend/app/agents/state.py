@@ -1,10 +1,4 @@
-"""Shared state passed between LangGraph workflow nodes.
-
-A plain TypedDict (not a Pydantic model): LangGraph merges each node's
-returned partial dict into this state using simple last-write-wins
-semantics, which is exactly right for this sprint's linear pipeline --
-no custom reducers needed.
-"""
+"""Shared state passed between LangGraph workflow nodes."""
 
 from __future__ import annotations
 
@@ -34,8 +28,12 @@ class ChatState(TypedDict, total=False):
     # --- context builder node output ---
     llm_messages: list[LLMMessage]
 
-    # --- response generator node output ---
+    # --- response generator / evaluator output ---
     response_text: str
+    evaluation_status: str
+    evaluation_attempts: int
+    evaluation_reasoning: str
+    human_review_required: bool
 
     # --- citation builder node output ---
     citations: list[Citation]
