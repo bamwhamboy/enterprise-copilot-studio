@@ -1,21 +1,8 @@
 """Chat Orchestrator.
 
-The single entry point for all chat interactions (Sprint 5): receives a
-user message, loads conversation memory, runs the LangGraph workflow,
-persists the turn, and returns a structured, cited response.
-
-Both handle_chat() and handle_chat_stream() drive the exact same
-compiled graph -- there is exactly one orchestration pipeline. The only
-difference is how each consumes it:
-
-- handle_chat() calls workflow.ainvoke(...) and returns the final state.
-- handle_chat_stream() calls workflow.astream(..., stream_mode=["custom",
-  "values"]): "custom" events are the token deltas the response
-  generator node emits via LangGraph's get_stream_writer() (see
-  app/agents/response_generator_node.py); the last "values" event is
-  the same final state ainvoke() would have returned. No retrieval,
-  prompt-assembly, or generation logic is duplicated here -- all of it
-  lives in the graph's nodes, used identically by both paths.
+The single entry point for all chat interactions: receives a user message,
+loads conversation memory, runs the LangGraph workflow, persists the turn,
+and returns a structured, cited response.
 """
 
 from __future__ import annotations
@@ -49,17 +36,9 @@ class ChatOrchestratorService:
         self._copilots = copilot_service
 
     async def _resolve_copilot_and_session(self, request: ChatRequest):
-        # Tenant isolation: resolves the copilot only within the
-        # requesting user's own organization (organization_id is set at
-        # the API boundary in app/api/v1/chat.py, never client-trusted --
-        # same pattern as user_id). Reuses CopilotService.get_copilot's
-        # already-tested ownership check (404, not 403, for a copilot
-        # belonging to a different organization) rather than
-        # re-implementing the same check here.
         copilot = await self._copilots.get_copilot(
             request.copilot_id, organization_id=request.organization_id
         )
-
         session = await self._memory.get_or_create_session(
             user_id=request.user_id,
             copilot_id=request.copilot_id,
@@ -71,33 +50,15 @@ class ChatOrchestratorService:
         copilot_source_ids = {str(ks.id) for ks in copilot.knowledge_sources}
         if request.knowledge_source_id:
             requested = str(request.knowledge_source_id)
-            # A client-supplied knowledge_source_id must actually be one
-            # of this copilot's own attached sources -- without this
-            # check, a client could chat against a copilot they legitimately
-            # own but supply an arbitrary knowledge_source_id belonging to
-            # a different organization, and retrieval would search that
-            # organization's content. CopilotService.get_many already
-            # guarantees a copilot's attached sources all belong to its
-            # own organization (see app/services/copilot_service.py), so
-            # checking membership in that set is sufficient here without
-            # a second organization lookup.
             if requested not in copilot_source_ids:
                 raise NotFoundError("KnowledgeSource", request.knowledge_source_id)
             return requested
         if copilot.knowledge_sources:
-            # Default to the copilot's first linked source when the caller
-            # doesn't specify one -- a reasonable default, not a hard rule.
             return str(copilot.knowledge_sources[0].id)
         return None
 
     async def _prepare(self, request: ChatRequest):
-        """Shared pre-flight for both entry points: validate input, resolve
-        the copilot/session, and build the graph's initial state. Not
-        "orchestration" itself (that's entirely inside the graph) --
-        just the request-to-state translation both paths need identically.
-        """
         self._guardrails.enforce_input(request.message)
-
         copilot, session = await self._resolve_copilot_and_session(request)
         history = await self._memory.load_history(session.id)
         knowledge_source_id = self._resolve_knowledge_source_id(request, copilot)
@@ -106,10 +67,6 @@ class ChatOrchestratorService:
             "user_message": request.message,
             "copilot_name": copilot.name,
             "domain": copilot.domain,
-            # The copilot's own model choice, if it has one. Falsy (None or
-            # "") falls through to Settings.DEFAULT_LLM_MODEL via the
-            # existing `request.model or self.config.default_model` fallback
-            # already in app/llm/providers.py -- no change needed there.
             "copilot_model": copilot.model,
             "knowledge_source_id": knowledge_source_id,
             "history": history,
@@ -119,7 +76,6 @@ class ChatOrchestratorService:
     async def handle_chat(self, request: ChatRequest) -> ChatResponse:
         """Non-streaming chat turn: runs the compiled LangGraph workflow."""
         session, initial_state = await self._prepare(request)
-
         final_state = await self._workflow.ainvoke(initial_state)
 
         await self._memory.append_message(session.id, role="user", content=request.message)
@@ -132,19 +88,19 @@ class ChatOrchestratorService:
             message=final_state["response_text"],
             citations=final_state.get("citations", []),
             confidence=final_state.get("confidence", 0.0),
+            evaluation_status=final_state.get("evaluation_status", "passed"),
+            evaluation_attempts=final_state.get("evaluation_attempts", 0),
+            human_review_required=final_state.get("human_review_required", False),
         )
 
     async def handle_chat_stream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
-        """Streaming chat turn: drives the same compiled workflow via astream().
+        """Streaming chat turn using the same verified final state.
 
-        "custom" stream events (the response generator node's token
-        deltas) become SSE "chunk" events as they arrive; once the graph
-        finishes, the final "values" event's response_text/citations/
-        confidence become the SSE "done" event -- the same
-        guardrail-checked, masked text handle_chat() would have returned.
+        The response generator emits a single custom event only after the
+        evaluation/correction loop completes, so an unverified draft is never
+        sent to the browser.
         """
         session, initial_state = await self._prepare(request)
-
         final_state: dict = {}
         try:
             async for mode, chunk in self._workflow.astream(
@@ -160,7 +116,6 @@ class ChatOrchestratorService:
             return
 
         response_text = final_state.get("response_text", "")
-
         await self._memory.append_message(session.id, role="user", content=request.message)
         await self._memory.append_message(session.id, role="assistant", content=response_text)
 
@@ -172,5 +127,8 @@ class ChatOrchestratorService:
                 "message": response_text,
                 "citations": citations,
                 "confidence": final_state.get("confidence", 0.0),
+                "evaluation_status": final_state.get("evaluation_status", "passed"),
+                "evaluation_attempts": final_state.get("evaluation_attempts", 0),
+                "human_review_required": final_state.get("human_review_required", False),
             },
         )
