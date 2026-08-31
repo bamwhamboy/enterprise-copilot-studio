@@ -38,7 +38,10 @@ def make_retrieval_node(
         retrieved = build_retrieved_chunks(node_results)
 
         if settings.RAG_RERANK_ENABLED:
-            retrieved = reranker.rerank(query, retrieved)
+           retrieved = reranker.rerank(query, retrieved)
+
+    # Keep only the final number of chunks after reranking.
+        retrieved = retrieved[: settings.HYBRID_FINAL_TOP_K]
 
         confidence = confidence_scorer.score(retrieved)
         compressed = compression.compress(retrieved)
