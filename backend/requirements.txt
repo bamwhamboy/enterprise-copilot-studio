@@ -74,7 +74,7 @@ litellm==1.95.0
 # W&B Weave provides tracing plus the LLM-powered HallucinationFreeScorer.
 # The [scorers] extra installs the scorer dependencies used by the online
 # response evaluator.
-weave[scorers]==0.53.6
+weave==0.53.7
 
 # --- Sprint 6: Authentication & Authorization -----------------------------
 pyjwt==2.10.1

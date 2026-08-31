@@ -6,14 +6,13 @@ evaluation triggers a correction attempt, and that a second failure escalates
 to human review.
 """
 
-from types import SimpleNamespace
 
 import pytest
 
 from app.agents import response_generator_node as module
 from app.core.config import Settings
 from app.evaluation.response_evaluator import ResponseEvaluation
-
+from app.llm.models import LLMMessage
 
 class _FakeGeneration:
     def __init__(self, content: str):
@@ -69,8 +68,8 @@ def _state():
         "domain": "finance",
         "copilot_model": "groq/openai/gpt-oss-20b",
         "llm_messages": [
-            SimpleNamespace(role="system", content="Answer only from the supplied policy."),
-            SimpleNamespace(role="user", content="What is the reimbursement limit?"),
+            LLMMessage(role="system", content="Answer only from the supplied policy."),
+	    LLMMessage(role="user", content="What is the reimbursement limit?"),
         ],
         "retrieved_chunks": [],
     }
