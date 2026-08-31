@@ -25,7 +25,7 @@ class CopilotCreate(BaseModel):
     # don't specify their own model (the ORM column's own default is
     # never reached, since the service always passes this field through
     # explicitly).
-    model: str = Field(default="llama-3.3-70b-versatile", max_length=100)
+    model: str = Field(default="openai/gpt-oss-120b", max_length=100)
     knowledge_source_ids: list[uuid.UUID] = Field(default_factory=list)
 
 

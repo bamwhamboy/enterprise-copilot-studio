@@ -29,7 +29,7 @@ async def test_create_copilot_minimal(client: AsyncClient, register_and_login) -
     assert body["name"] == "Minimal Copilot"
     assert body["domain"] == "hr"
     assert body["status"] == "draft"
-    assert body["model"] == "llama-3.3-70b-versatile"
+    assert body["model"] == "openai/gpt-oss-120b"
     assert body["knowledge_sources"] == []
 
 
