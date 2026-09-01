@@ -71,8 +71,13 @@ def make_response_generator_node(
                 temperature=settings.DEFAULT_TEMPERATURE,
                 max_tokens=settings.DEFAULT_MAX_TOKENS,
             )
-            generation = await gateway.generate(request)
-            answer = guardrails.enforce_output(generation.content)
+            answer_parts: list[str] = []
+
+            async for chunk in gateway.stream(request):
+                if chunk.delta:
+                    answer_parts.append(chunk.delta)
+
+            answer = guardrails.enforce_output("".join(answer_parts))
 
             if not settings.RESPONSE_EVALUATION_ENABLED:
                 evaluation_status = "disabled"
@@ -104,11 +109,13 @@ def make_response_generator_node(
                 answer = _HUMAN_REVIEW_MESSAGE
 
         writer = get_stream_writer()
+
         if answer:
-            # Emit only after the final quality gate. This deliberately sends
-            # the verified response as one SSE chunk rather than leaking the
-            # first draft before evaluation completes.
-            writer({"delta": answer})
+            # Emit only after the final quality gate.
+            # The answer has already passed evaluation, so it is safe to stream.
+            chunk_size = 20
+            for i in range(0, len(answer), chunk_size):
+                writer({"delta": answer[i:i + chunk_size]})
 
         return {
             "response_text": answer,

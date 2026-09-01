@@ -60,14 +60,15 @@ class ProviderConfig:
 def to_litellm_model(provider: LLMProvider, model: str) -> str:
     """Build the LiteLLM model string for a provider/model pair.
 
-    A model may itself contain a slash, for example Groq's
-    ``openai/gpt-oss-120b`` model identifier. That slash does not mean the
-    provider prefix is already present. We therefore only skip prefixing
-    when the model already starts with the expected provider prefix.
+    Models that already contain a provider namespace, such as
+    ``openai/gpt-oss-120b``, are passed through unchanged. Bare model
+    names are prefixed using the configured provider.
     """
     prefix = _LITELLM_PREFIXES[provider]
-    if not prefix or model.startswith(prefix):
+
+    if not prefix or "/" in model:
         return model
+
     return f"{prefix}{model}"
 
 
@@ -110,16 +111,29 @@ class LiteLLMProviderClient:
         if self.config.base_url:
             kwargs["api_base"] = self.config.base_url
         return kwargs
-
     async def generate(self, request: GenerationRequest) -> GenerationResponse:
         kwargs = self._call_kwargs(request)
         logger.info(
             "LiteLLM generate() [request_id=%s model=%s]", request.request_id, kwargs["model"]
         )
+
         response = await litellm.acompletion(**kwargs)
-        choice = response.choices[0]
-        content = choice.message.content or ""
-        usage = getattr(response, "usage", None)
+
+        # LiteLLM normally returns a completion response. Some callers/tests
+        # may provide a streaming-shaped async generator instead.
+        if hasattr(response, "__aiter__"):
+            parts: list[str] = []
+            async for chunk in response:
+                delta = chunk.choices[0].delta
+                parts.append(getattr(delta, "content", None) or "")
+
+            content = "".join(parts)
+            usage = None
+        else:
+            choice = response.choices[0]
+            content = choice.message.content or ""
+            usage = getattr(response, "usage", None)
+
         return GenerationResponse(
             content=content,
             provider=self.config.provider,

@@ -13,20 +13,21 @@ from app.agents import response_generator_node as module
 from app.core.config import Settings
 from app.evaluation.response_evaluator import ResponseEvaluation
 from app.llm.models import LLMMessage
-
-class _FakeGeneration:
-    def __init__(self, content: str):
-        self.content = content
-
+from types import SimpleNamespace
 
 class _FakeGateway:
     def __init__(self, responses: list[str]):
         self.responses = iter(responses)
         self.requests = []
 
-    async def generate(self, request):
+    def stream(self, request):
         self.requests.append(request)
-        return _FakeGeneration(next(self.responses))
+        content = next(self.responses)
+
+        async def _chunks():
+            yield SimpleNamespace(delta=content)
+
+        return _chunks()
 
 
 class _FakeGuardrails:
@@ -92,7 +93,7 @@ async def test_grounded_first_answer_is_emitted(settings, fake_stream_writer):
     assert result["evaluation_attempts"] == 1
     assert result["human_review_required"] is False
     assert len(gateway.requests) == 1
-    assert fake_stream_writer == [{"delta": "The policy allows INR 10,000."}]
+    assert "".join(event["delta"] for event in fake_stream_writer) == "The policy allows INR 10,000."
 
 
 @pytest.mark.asyncio
@@ -123,7 +124,7 @@ async def test_hallucinated_first_answer_is_corrected_before_emission(
     assert result["human_review_required"] is False
     assert len(gateway.requests) == 2
     assert "INR 50,000 is not supported" in gateway.requests[1].messages[0].content
-    assert fake_stream_writer == [{"delta": "The policy allows INR 10,000."}]
+    assert "".join(event["delta"] for event in fake_stream_writer) == "The policy allows INR 10,000."
 
 
 @pytest.mark.asyncio
@@ -152,4 +153,4 @@ async def test_second_failed_evaluation_requires_human_review(
     assert result["evaluation_attempts"] == 2
     assert result["human_review_required"] is True
     assert result["response_text"].startswith("I couldn't provide a sufficiently verified")
-    assert fake_stream_writer == [{"delta": result["response_text"]}]
+    assert "".join(event["delta"] for event in fake_stream_writer) == result["response_text"]

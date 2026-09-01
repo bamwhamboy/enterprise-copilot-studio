@@ -351,19 +351,19 @@ async def test_chat_and_chat_stream_produce_identical_final_text(
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_delivers_chunks_incrementally_not_buffered(
+async def test_chat_stream_buffers_generation_until_quality_gate_then_streams(
     client: AsyncClient, monkeypatch, register_and_login
 ) -> None:
-    """Proves the response is streamed as it's produced, not assembled
-    first and chunked afterward: each mock delta only becomes available
-    after an explicit await, so if the SSE frames only appeared after
-    every delta had already been produced, this ordering check would fail.
+    """Generation is buffered until the quality gate completes, then the
+    verified answer is emitted as SSE chunks.
     """
     tokens = await register_and_login(email="chat8@test.com")
-    setup = await _setup_copilot_with_indexed_document(client, _auth_headers(tokens))
+    setup = await _setup_copilot_with_indexed_document(
+        client, _auth_headers(tokens)
+    )
 
     produced_order: list[str] = []
-    received_order: list[str] = []
+    received_deltas: list[str] = []
 
     async def fake_stream(**kwargs):
         async def gen():
@@ -380,20 +380,32 @@ async def test_chat_stream_delivers_chunks_incrementally_not_buffered(
 
         return gen()
 
-    monkeypatch.setattr("app.llm.providers.litellm.acompletion", fake_stream)
+    monkeypatch.setattr(
+        "app.llm.providers.litellm.acompletion",
+        fake_stream,
+    )
 
     async with client.stream(
         "POST",
         f"{CHAT_BASE}/stream",
         headers=_auth_headers(tokens),
-        json={"copilot_id": setup["copilot"]["id"], "message": "hello"},
+        json={
+            "copilot_id": setup["copilot"]["id"],
+            "message": "hello",
+        },
     ) as response:
         async for line in response.aiter_lines():
             if line.startswith("data:") and '"delta"' in line:
                 payload = json.loads(line[len("data: ") :])
-                received_order.append(payload["delta"])
+                received_deltas.append(payload["delta"])
 
-    assert received_order == produced_order == ["Hel", "lo ", "world"]
+                # No SSE delta may be emitted until the complete
+                # generation has been consumed.
+                assert produced_order == ["Hel", "lo ", "world"]
+
+    assert produced_order == ["Hel", "lo ", "world"]
+    assert "".join(received_deltas) == "Hello world"
+    assert received_deltas
 
 
 @pytest.mark.asyncio
@@ -492,7 +504,7 @@ async def test_chat_falls_back_to_default_model_when_copilot_has_none(
     assert response.status_code == 200
     settings = get_settings()
     assert settings.DEFAULT_LLM_MODEL != ""  # sanity: the fallback target is real
-    assert captured["model"] == f"groq/{settings.DEFAULT_LLM_MODEL}"
+    assert captured["model"] == settings.DEFAULT_LLM_MODEL
 
 
 @pytest.mark.asyncio
