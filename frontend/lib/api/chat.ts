@@ -1,11 +1,49 @@
-import { API_BASE_URL, apiClient } from "@/services/api-client";
-import { getAuthState } from "@/store/auth-store";
+import { API_BASE_URL, apiClient, refreshAccessToken } from "@/services/api-client";
+import { getAuthState, useAuthStore } from "@/store/auth-store";
 import type { ChatRequestPayload, ChatResponse, ChatStreamDone } from "@/types/chat";
 
 export interface ChatStreamHandlers {
   onChunk: (delta: string) => void;
   onDone: (data: ChatStreamDone) => void;
   onError: (message: string) => void;
+}
+
+/** Generic, non-backend-derived message shown when the session can't be
+ * silently recovered -- never the raw 401 body ("Could not validate
+ * credentials"), which would otherwise read like an assistant reply. */
+const SESSION_EXPIRED_MESSAGE = "Your session has expired. Please log in again.";
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+/** One raw POST to /chat/stream with the given access token. Throws on
+ * network failure (including AbortError, left for the caller to check). */
+function postChatStream(
+  payload: ChatRequestPayload,
+  accessToken: string | null,
+  signal?: AbortSignal
+): Promise<Response> {
+  return fetch(`${API_BASE_URL}/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Same "log the user out and send them to /login" convention
+ * services/api-client.ts uses once refresh is exhausted -- kept identical
+ * here so the two request paths fail the same way. */
+function endSessionAsExpired(handlers: ChatStreamHandlers) {
+  useAuthStore.getState().logout();
+  handlers.onError(SESSION_EXPIRED_MESSAGE);
+  if (typeof window !== "undefined") {
+    window.location.href = "/login";
+  }
 }
 
 /**
@@ -16,6 +54,13 @@ export interface ChatStreamHandlers {
  * So this parses the "event: ...\ndata: ...\n\n" frames manually from
  * the raw fetch ReadableStream, matching exactly what
  * app/api/v1/chat.py's StreamingResponse writes.
+ *
+ * Unlike services/api-client.ts's `request()`, this can't reuse fetch's
+ * response body twice, so it drives the same refresh-once-and-retry flow
+ * (via the exported `refreshAccessToken()`) by hand: on a 401, refresh,
+ * retry exactly once with the new token, and only fall back to ending
+ * the session if the refresh fails or the retry is also unauthorized.
+ * Any other status (5xx, etc.) is left untouched -- no refresh attempt.
  */
 export async function streamChat(
   payload: ChatRequestPayload,
@@ -26,19 +71,34 @@ export async function streamChat(
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE_URL}/chat/stream`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify(payload),
-      signal,
-    });
+    res = await postChatStream(payload, accessToken, signal);
   } catch (err) {
-    if ((err as Error).name === "AbortError") return;
+    if (isAbortError(err)) return;
     handlers.onError("Could not reach the server.");
     return;
+  }
+
+  if (res.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (!newToken) {
+      endSessionAsExpired(handlers);
+      return;
+    }
+
+    try {
+      res = await postChatStream(payload, newToken, signal);
+    } catch (err) {
+      if (isAbortError(err)) return;
+      handlers.onError("Could not reach the server.");
+      return;
+    }
+
+    if (res.status === 401) {
+      // Retried exactly once with a freshly refreshed token and still
+      // unauthorized -- stop here rather than looping.
+      endSessionAsExpired(handlers);
+      return;
+    }
   }
 
   if (!res.ok || !res.body) {
