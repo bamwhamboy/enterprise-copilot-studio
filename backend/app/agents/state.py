@@ -16,6 +16,7 @@ class ChatState(TypedDict, total=False):
     domain: str
     copilot_model: str | None
     knowledge_source_id: str | None
+    document_id: str | None
     history: list[LLMMessage]
 
     # --- planner node output ---

@@ -16,6 +16,7 @@ from app.guardrails.guardrails_runtime import GuardrailsRuntime
 from app.memory.conversation_memory_service import ConversationMemoryService
 from app.schemas.chat import ChatRequest, ChatResponse, ChatStreamEvent
 from app.services.copilot_service import CopilotService
+from app.services.document_service import DocumentService
 
 logger = get_logger(__name__)
 
@@ -28,12 +29,14 @@ class ChatOrchestratorService:
         guardrails: GuardrailsRuntime,
         workflow,
         copilot_service: CopilotService,
+        document_service: DocumentService,
     ) -> None:
         self._settings = settings
         self._memory = memory
         self._guardrails = guardrails
         self._workflow = workflow
         self._copilots = copilot_service
+        self._documents = document_service
 
     async def _resolve_copilot_and_session(self, request: ChatRequest):
         copilot = await self._copilots.get_copilot(
@@ -57,11 +60,46 @@ class ChatOrchestratorService:
             return str(copilot.knowledge_sources[0].id)
         return None
 
+    async def _resolve_scope(
+        self,
+        request: ChatRequest,
+        copilot,
+    ) -> tuple[str | None, str | None]:
+        """Resolve and validate knowledge-source/document retrieval scope."""
+
+        if request.document_id is None:
+            return self._resolve_knowledge_source_id(request, copilot), None
+
+        document = await self._documents.get_document(
+            request.document_id,
+            organization_id=request.organization_id,
+        )
+
+        document_knowledge_source_id = str(document.knowledge_source_id)
+
+        copilot_source_ids = {
+            str(ks.id) for ks in copilot.knowledge_sources
+        }
+
+        if document_knowledge_source_id not in copilot_source_ids:
+            raise NotFoundError("Document", request.document_id)
+
+        if (
+            request.knowledge_source_id is not None
+            and str(request.knowledge_source_id)
+            != document_knowledge_source_id
+        ):
+            raise NotFoundError("Document", request.document_id)
+
+        return document_knowledge_source_id, str(request.document_id)
+
     async def _prepare(self, request: ChatRequest):
         self._guardrails.enforce_input(request.message)
         copilot, session = await self._resolve_copilot_and_session(request)
         history = await self._memory.load_history(session.id)
-        knowledge_source_id = self._resolve_knowledge_source_id(request, copilot)
+        knowledge_source_id, document_id = await self._resolve_scope(
+            request, copilot
+        )
 
         initial_state = {
             "user_message": request.message,
@@ -69,6 +107,7 @@ class ChatOrchestratorService:
             "domain": copilot.domain,
             "copilot_model": copilot.model,
             "knowledge_source_id": knowledge_source_id,
+            "document_id": document_id,
             "history": history,
         }
         return session, initial_state

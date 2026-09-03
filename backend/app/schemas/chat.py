@@ -15,6 +15,7 @@ class ChatRequest(BaseModel):
     session_id: uuid.UUID | None = None
     message: str = Field(min_length=1, max_length=8000)
     knowledge_source_id: uuid.UUID | None = None
+    document_id: uuid.UUID | None = None
 
 
 class ChatResponse(BaseModel):
