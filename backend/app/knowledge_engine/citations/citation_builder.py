@@ -16,6 +16,13 @@ from app.knowledge_engine.models import Citation, RetrievedChunk
 def build_citation(node_with_score: NodeWithScore) -> Citation:
     metadata = node_with_score.node.metadata or {}
     return Citation(
+        # "source_document_id" (not "document_id") is the payload key
+        # actually written at index time -- see indexing_service.py's
+        # _chunk_to_node, which renames it specifically to dodge a
+        # LlamaIndex collision with node.ref_doc_id. Defaults to "" (same
+        # style as knowledge_source_id below) rather than fabricating an
+        # id when metadata genuinely doesn't carry one.
+        document_id=metadata.get("source_document_id", ""),
         document_name=metadata.get("document_name", "Unknown document"),
         knowledge_source_id=metadata.get("knowledge_source_id", ""),
         page_number=metadata.get("page_number"),

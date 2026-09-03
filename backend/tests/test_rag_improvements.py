@@ -10,7 +10,9 @@ from app.knowledge_engine.retrieval.confidence_scorer import ConfidenceScorer
 from app.knowledge_engine.retrieval.query_rewriter import QueryRewriter
 from app.knowledge_engine.retrieval.reranker import Reranker
 
-_CITATION = Citation(document_name="doc.pdf", knowledge_source_id="ks1", chunk_number=0)
+_CITATION = Citation(
+    document_id="doc1", document_name="doc.pdf", knowledge_source_id="ks1", chunk_number=0
+)
 
 
 def test_query_rewriter_normalizes_whitespace() -> None:
