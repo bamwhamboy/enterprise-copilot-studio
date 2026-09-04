@@ -8,6 +8,34 @@ export interface ChatStreamHandlers {
   onError: (message: string) => void;
 }
 
+export interface BuildChatRequestPayloadArgs {
+  copilotId: string;
+  message: string;
+  sessionId?: string;
+  /** Fix #2C: explicit document scope, e.g. from a "Chat with this
+   * document" link. Falsy (undefined/null/"") omits document_id from the
+   * payload entirely -- not sent as null -- so unscoped chat is byte-for-
+   * byte identical to before this field existed. */
+  documentId?: string | null;
+}
+
+/** Builds the /chat and /chat/stream request payload. Pulled out as a pure
+ * function (rather than inlined in ChatWorkspace) so document-scope
+ * inclusion/omission is unit-testable without rendering React. */
+export function buildChatRequestPayload({
+  copilotId,
+  message,
+  sessionId,
+  documentId,
+}: BuildChatRequestPayloadArgs): ChatRequestPayload {
+  return {
+    copilot_id: copilotId,
+    session_id: sessionId,
+    message,
+    ...(documentId ? { document_id: documentId } : {}),
+  };
+}
+
 /** Generic, non-backend-derived message shown when the session can't be
  * silently recovered -- never the raw 401 body ("Could not validate
  * credentials"), which would otherwise read like an assistant reply. */

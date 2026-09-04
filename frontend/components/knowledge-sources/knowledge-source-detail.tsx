@@ -1,14 +1,25 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, CheckCircle2, FileText, Loader2, Sparkles, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  MessageSquare,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 
 import { knowledgeSourcesApi } from "@/lib/api/knowledge-sources";
 import { documentsApi } from "@/lib/api/documents";
+import { copilotsApi } from "@/lib/api/copilots";
 import { invalidateKnowledgeData } from "@/lib/query-invalidation";
+import { findSoleAttachedCopilot } from "@/lib/document-chat-scope";
 import type { DocumentClassificationResponse } from "@/types/document-classification";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -55,6 +66,15 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
       return hasInFlightDocument ? 3000 : false;
     },
   });
+
+  // Fix #2C: "Chat with this document" needs to know which copilot to
+  // link to. Reuses the same ["copilots"] query key chat-workspace.tsx
+  // seeds/reads, so this is typically already cached.
+  const { data: copilots } = useQuery({
+    queryKey: ["copilots"],
+    queryFn: copilotsApi.list,
+  });
+  const soleAttachedCopilot = findSoleAttachedCopilot(copilots, knowledgeSourceId);
 
   const deleteDocMutation = useMutation({
     mutationFn: (documentId: string) => documentsApi.remove(documentId),
@@ -257,6 +277,14 @@ export function KnowledgeSourceDetail({ knowledgeSourceId }: { knowledgeSourceId
                         Index now
                       </Button>
                     )}
+                  {doc.index_status === "INDEXED" && soleAttachedCopilot && (
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/copilots/${soleAttachedCopilot.id}/chat?documentId=${doc.id}`}>
+                        <MessageSquare className="size-3.5" />
+                        Chat with this document
+                      </Link>
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"

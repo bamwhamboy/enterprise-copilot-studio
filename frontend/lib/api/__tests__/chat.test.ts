@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { streamChat, type ChatStreamHandlers } from "@/lib/api/chat";
+import { buildChatRequestPayload, streamChat, type ChatStreamHandlers } from "@/lib/api/chat";
 import { useAuthStore } from "@/store/auth-store";
 import type { ChatRequestPayload } from "@/types/chat";
 
@@ -274,5 +274,68 @@ describe("streamChat", () => {
       expect(message).not.toContain(REFRESHED_ACCESS_TOKEN);
       expect(message).not.toContain(REFRESH_TOKEN);
     }
+  });
+});
+
+/**
+ * Fix #2C: explicit document-scoped chat. buildChatRequestPayload() is the
+ * single place ChatWorkspace constructs the /chat(/stream) payload, so
+ * document_id inclusion/omission is tested here directly rather than via
+ * a full component render (no jsdom/testing-library in this project's
+ * Vitest setup -- see vitest.config.ts, "node" environment only).
+ */
+describe("buildChatRequestPayload", () => {
+  it("a/b: includes document_id when a document scope is present", () => {
+    const payload = buildChatRequestPayload({
+      copilotId: "copilot-1",
+      message: "What does this say?",
+      sessionId: "session-1",
+      documentId: "document-a",
+    });
+
+    expect(payload).toEqual({
+      copilot_id: "copilot-1",
+      session_id: "session-1",
+      message: "What does this say?",
+      document_id: "document-a",
+    });
+  });
+
+  it("c: omits document_id entirely (not null) when no document scope is present", () => {
+    const payload = buildChatRequestPayload({
+      copilotId: "copilot-1",
+      message: "What does this say?",
+      sessionId: "session-1",
+    });
+
+    expect(payload).toEqual({
+      copilot_id: "copilot-1",
+      session_id: "session-1",
+      message: "What does this say?",
+    });
+    expect("document_id" in payload).toBe(false);
+  });
+
+  it("c: omits document_id for explicit undefined/null/empty-string scope alike", () => {
+    for (const documentId of [undefined, null, ""] as const) {
+      const payload = buildChatRequestPayload({
+        copilotId: "copilot-1",
+        message: "hi",
+        documentId,
+      });
+      expect("document_id" in payload).toBe(false);
+    }
+  });
+
+  it("e: existing unscoped-chat shape (no documentId arg at all) is unaffected", () => {
+    const payload = buildChatRequestPayload({
+      copilotId: "copilot-1",
+      message: "hi",
+    });
+    expect(payload).toEqual({
+      copilot_id: "copilot-1",
+      session_id: undefined,
+      message: "hi",
+    });
   });
 });

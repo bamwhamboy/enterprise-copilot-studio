@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Database } from "lucide-react";
+import { ArrowLeft, Database, FileText, X } from "lucide-react";
 
 import { copilotsApi } from "@/lib/api/copilots";
-import { streamChat } from "@/lib/api/chat";
+import { documentsApi } from "@/lib/api/documents";
+import { buildChatRequestPayload, streamChat } from "@/lib/api/chat";
 import { checkHealth } from "@/lib/api/health";
 import { useAuthStore } from "@/store/auth-store";
 import { useChatStore, useCopilotSessions } from "@/store/chat-store";
@@ -44,7 +45,17 @@ function getInitials(name: string) {
     .toUpperCase();
 }
 
-export function ChatWorkspace({ copilotId }: { copilotId: string }) {
+export function ChatWorkspace({
+  copilotId,
+  documentId,
+}: {
+  copilotId: string;
+  /** Fix #2C: explicit document scope from ?documentId= on this page's
+   * URL (see app/copilots/[copilotId]/chat/page.tsx). Undefined/absent
+   * means ordinary, unscoped copilot chat -- unchanged from before this
+   * prop existed. */
+  documentId?: string;
+}) {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
 
@@ -60,6 +71,20 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
     // response might not include, without blocking the initial paint.
     initialDataUpdatedAt: 0,
   });
+
+  // Fix #2C: only fetched when a document scope is actually present, to
+  // resolve its display name for the "Chat with: <name>" indicator below.
+  // Never gates sending the chat request itself -- documentId alone is
+  // enough for that (see buildChatRequestPayload in runStream).
+  const { data: scopedDocument } = useQuery({
+    queryKey: ["document", documentId],
+    queryFn: () => documentsApi.get(documentId as string),
+    enabled: Boolean(documentId),
+  });
+
+  function clearDocumentScope() {
+    router.push(`/copilots/${copilotId}/chat`);
+  }
 
   const sessions = useCopilotSessions(copilotId);
   const activeSessionId = useChatStore((s) => s.activeSessionIdByCopilot[copilotId]);
@@ -164,11 +189,12 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
       }, 90_000);
 
       await streamChat(
-        {
-          copilot_id: copilotId,
-          session_id: backendSessionId,
+        buildChatRequestPayload({
+          copilotId,
+          sessionId: backendSessionId,
           message: text,
-        },
+          documentId,
+        }),
         {
           onChunk: (delta) => appendToMessageContent(sessionId, assistantId, delta),
           onDone: (data) => {
@@ -198,7 +224,7 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
         controller.signal
       );
     },
-    [copilotId, appendMessage, appendToMessageContent, updateMessage, assignRealSessionId]
+    [copilotId, documentId, appendMessage, appendToMessageContent, updateMessage, assignRealSessionId]
   );
 
   function handleSend(text?: string) {
@@ -315,6 +341,26 @@ export function ChatWorkspace({ copilotId }: { copilotId: string }) {
             )}
           </div>
         </div>
+
+        {/* Fix #2C: document scope indicator -- only rendered when this
+            chat was opened via a "Chat with this document" link. */}
+        {documentId && (
+          <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 sm:px-6">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+              <FileText className="size-3" />
+              Chat with: {scopedDocument?.original_filename || scopedDocument?.name || "this document"}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-muted-foreground hover:text-foreground"
+              onClick={clearDocumentScope}
+              aria-label="Clear document scope"
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        )}
 
         {/* Messages */}
         <ScrollArea className="min-h-0 flex-1">
