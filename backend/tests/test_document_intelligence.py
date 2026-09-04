@@ -163,3 +163,103 @@ async def test_stateless_classify_endpoint_still_works_unchanged(
     )
     assert response.status_code == 200
     assert response.json()["domain"] == "Legal"
+
+
+@pytest.mark.asyncio
+async def test_classify_document_does_not_treat_ap_as_finance_keyword(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="di-ap-boundary@example.com"))
+    response = await client.post(
+        f"{DI_BASE}/classify",
+        json={
+            "filename": "Vendor Services Agreement.pdf",
+            "text": (
+                "This legal agreement contains an appendix with applicable "
+                "terms and approval requirements. The agreement governs vendor services."
+            ),
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["domain"] == "Legal"
+
+
+@pytest.mark.asyncio
+async def test_classify_document_does_not_match_claim_inside_claims(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="di-claims-boundary@example.com"))
+    response = await client.post(
+        f"{DI_BASE}/classify",
+        json={
+            "filename": "Employee Benefits Policy.pdf",
+            "text": "Employees may submit claims under the benefits policy.",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["domain"] == "HR"
+
+
+@pytest.mark.asyncio
+async def test_classify_document_preserves_multi_word_signal_matching(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="di-multiword@example.com"))
+    response = await client.post(
+        f"{DI_BASE}/classify",
+        json={
+            "filename": "Employee Leave Policy.pdf",
+            "text": "This policy covers employee time off and vacation requests.",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["domain"] == "HR"
+    assert "time off" in body["matched_signals"]
+
+
+@pytest.mark.asyncio
+async def test_classify_document_matches_standalone_claim_signal(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="di-claim@example.com"))
+    response = await client.post(
+        f"{DI_BASE}/classify",
+        json={
+            "filename": "Expense Reimbursement.pdf",
+            "text": "Submit each claim with the required receipts.",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["domain"] == "Finance"
+
+
+@pytest.mark.asyncio
+async def test_classify_vendor_services_agreement_as_legal(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(
+        await register_and_login(email="di-vendor-agreement@example.com")
+    )
+    response = await client.post(
+        f"{DI_BASE}/classify",
+        json={
+            "filename": "Vendor Services Agreement.pdf",
+            "text": (
+                "This Vendor Services Agreement is a legal agreement between "
+                "the parties governing the provision of vendor services. "
+                "The agreement contains an appendix with applicable terms "
+                "and approval requirements."
+            ),
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["domain"] == "Legal"
+    assert body["recommended_copilot"] == "Legal Copilot"
+    assert body["document_type"] == "Contract"

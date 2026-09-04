@@ -71,6 +71,9 @@ def _normalise(value: str) -> str:
     return re.sub(r"\s+", " ", value.lower().replace("_", " ").replace("-", " ")).strip()
 
 
+def _matches(signal: str, haystack: str) -> bool:
+    return re.search(rf"\b{re.escape(signal)}\b", haystack) is not None
+
 class DocumentIntelligenceService:
     """Recommend the most likely enterprise Copilot for a document."""
 
@@ -79,11 +82,11 @@ class DocumentIntelligenceService:
         ranked: list[tuple[int, _DomainProfile, list[str], str]] = []
 
         for profile in _PROFILES:
-            domain_hits = [keyword for keyword in profile.keywords if keyword in haystack]
+            domain_hits = [keyword for keyword in profile.keywords if _matches(keyword, haystack)]
             best_type = "General Knowledge"
             best_type_hits: list[str] = []
             for document_type, signals in profile.document_types:
-                hits = [signal for signal in signals if signal in haystack]
+                hits = [signal for signal in signals if _matches(signal, haystack)]
                 if len(hits) > len(best_type_hits):
                     best_type = document_type
                     best_type_hits = hits
