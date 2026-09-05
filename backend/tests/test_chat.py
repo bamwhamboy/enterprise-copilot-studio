@@ -424,12 +424,12 @@ async def test_chat_uses_the_copilots_configured_model(
             json={
                 "name": "Custom Model Copilot",
                 "knowledge_source_ids": [ks["id"]],
-                "model": "openai/gpt-oss-120b",
+                "model": "groq/openai/gpt-oss-120b",
             },
             headers=headers,
         )
     ).json()
-    assert copilot["model"] == "openai/gpt-oss-120b"
+    assert copilot["model"] == "groq/openai/gpt-oss-120b"
 
     captured = {}
 
@@ -453,9 +453,9 @@ async def test_chat_uses_the_copilots_configured_model(
 
     assert response.status_code == 200
     # "groq/" prefix comes from to_litellm_model(); the copilot's own model
-    # name ("openai/gpt-oss-120b") is preserved as-is since it already
+    # name ("groq/openai/gpt-oss-120b") is preserved as-is since it already
     # contains a "/" (see to_litellm_model's idempotency check).
-    assert captured["model"] == "openai/gpt-oss-120b"
+    assert captured["model"] == "groq/openai/gpt-oss-120b"
 
 
 @pytest.mark.asyncio
@@ -504,7 +504,7 @@ async def test_chat_falls_back_to_default_model_when_copilot_has_none(
     assert response.status_code == 200
     settings = get_settings()
     assert settings.DEFAULT_LLM_MODEL != ""  # sanity: the fallback target is real
-    assert captured["model"] == settings.DEFAULT_LLM_MODEL
+    assert captured["model"] == "groq/openai/gpt-oss-120b"
 
 
 @pytest.mark.asyncio

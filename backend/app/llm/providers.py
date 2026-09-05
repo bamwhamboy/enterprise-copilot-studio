@@ -58,19 +58,15 @@ class ProviderConfig:
 
 
 def to_litellm_model(provider: LLMProvider, model: str) -> str:
-    """Build the LiteLLM model string for a provider/model pair.
-
-    Models that already contain a provider namespace, such as
-    ``openai/gpt-oss-120b``, are passed through unchanged. Bare model
-    names are prefixed using the configured provider.
-    """
     prefix = _LITELLM_PREFIXES[provider]
 
-    if not prefix or "/" in model:
+    if not prefix:
+        return model
+
+    if model.startswith(prefix):
         return model
 
     return f"{prefix}{model}"
-
 
 def _messages_to_dicts(messages: list[LLMMessage]) -> list[dict[str, str]]:
     return [
