@@ -9,6 +9,8 @@ stream, so an unverified draft is never exposed to the client.
 
 from __future__ import annotations
 
+import re
+
 from langgraph.config import get_stream_writer
 
 from app.agents.state import ChatState
@@ -33,6 +35,15 @@ def _context_text(state: ChatState) -> str:
         )
         or "No relevant context was found."
     )
+
+
+def _sanitize_llm_output(text: str) -> str:
+    """Strip HTML artifacts the model occasionally produces inside
+    markdown tables (e.g. <br> as its own workaround for a multi-line
+    table cell), which most frontend markdown renderers correctly
+    refuse to execute as real line breaks -- so it shows up as literal
+    text instead."""
+    return re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
 
 
 def make_response_generator_node(
@@ -77,7 +88,7 @@ def make_response_generator_node(
                 if chunk.delta:
                     answer_parts.append(chunk.delta)
 
-            answer = guardrails.enforce_output("".join(answer_parts))
+            answer = guardrails.enforce_output(_sanitize_llm_output("".join(answer_parts)))
 
             if not settings.RESPONSE_EVALUATION_ENABLED:
                 evaluation_status = "disabled"
@@ -113,6 +124,8 @@ def make_response_generator_node(
         if answer:
             # Emit only after the final quality gate.
             # The answer has already passed evaluation, so it is safe to stream.
+            # It was also already sanitized (see above) before evaluation, so
+            # the text streamed here is the same clean text the evaluator judged.
             chunk_size = 20
             for i in range(0, len(answer), chunk_size):
                 writer({"delta": answer[i:i + chunk_size]})

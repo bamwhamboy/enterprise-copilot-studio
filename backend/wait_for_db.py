@@ -32,7 +32,7 @@ async def wait_for_db() -> None:
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            conn = await asyncpg.connect(dsn, timeout=5)
+            conn = await asyncpg.connect(dsn, timeout=5, ssl="require")
             await conn.close()
             print(f"Database is ready (attempt {attempt}/{MAX_ATTEMPTS}).")
             return
