@@ -22,9 +22,12 @@ export interface ApiError {
 // Coalesces concurrent 401s into a single refresh request instead of a
 // stampede of parallel /auth/refresh calls (which would race the
 // backend's single-use refresh-token rotation and fail all but one).
+// Exported so other request paths that can't go through `request()`
+// (e.g. the raw-fetch SSE stream in lib/api/chat.ts) can drive the same
+// refresh flow instead of re-implementing it.
 let refreshPromise: Promise<string | null> | null = null;
 
-async function refreshAccessToken(): Promise<string | null> {
+export async function refreshAccessToken(): Promise<string | null> {
   const { refreshToken } = getAuthState();
   if (!refreshToken) return null;
 

@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.base.embeddings.base import BaseEmbedding
-from llama_index.core.schema import TextNode
+from llama_index.core.schema import MetadataMode, TextNode
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,17 +53,34 @@ def _chunk_to_node(chunk: HierarchicalChunk) -> TextNode:
     return TextNode(text=chunk.text, id_=chunk.node_id, metadata=metadata)
 
 
-def _build_vector_index(
-    nodes: list[TextNode],
-    storage_context: StorageContext,
-    embed_model: BaseEmbedding,
-) -> None:
-    """Plain, synchronous entry point for the embed-and-write-to-Qdrant
-    step -- kept as a standalone module-level function (rather than
-    called inline) specifically so it has a single, unambiguous call
-    site to hand to ``asyncio.to_thread`` below.
+def _embed_nodes(nodes: list[TextNode], embed_model: BaseEmbedding) -> None:
+    """Embed every node in place (sets ``node.embedding``).
+
+    Plain, synchronous entry point -- kept as a standalone module-level
+    function (rather than called inline) specifically so it has a single,
+    unambiguous call site to hand to ``asyncio.to_thread`` below, and so
+    it's separately timeable from the Qdrant write step in
+    ``index_document``. Equivalent to what ``VectorStoreIndex(nodes, ...)``
+    does internally before its own vector-store ``add`` call -- split out
+    here purely so embedding time and Qdrant-write time can be measured
+    independently; the embeddings produced and the batching behavior
+    (``embed_model.embed_batch_size``) are unchanged either way.
     """
-    VectorStoreIndex(nodes, storage_context=storage_context, embed_model=embed_model)
+    embeddings = embed_model.get_text_embedding_batch(
+        [node.get_content(metadata_mode=MetadataMode.EMBED) for node in nodes]
+    )
+    for node, embedding in zip(nodes, embeddings):
+        node.embedding = embedding
+
+
+def _write_nodes_to_vector_store(
+    nodes: list[TextNode], vector_store: QdrantVectorStore
+) -> list[str]:
+    """Plain, synchronous entry point for the Qdrant write step -- same
+    reasoning as ``_embed_nodes`` above. Requires every node to already
+    have an embedding set (``_embed_nodes`` must run first).
+    """
+    return vector_store.add(nodes)
 
 
 class IndexingService:
@@ -94,10 +111,20 @@ class IndexingService:
         await self.session.commit()
         logger.info("Document %s -> INDEXING", document_id)
 
+        # Lightweight wall-clock timing instrumentation only -- no behavior
+        # change. Each stage's duration is measured around the exact same
+        # calls that already existed (chunking) or that replace a single
+        # fused call with the same work split into two explicit,
+        # separately-timed steps (embedding, Qdrant write -- see
+        # _embed_nodes/_write_nodes_to_vector_store above). Reported
+        # together in one summary log line once indexing succeeds.
+        pipeline_start = time.perf_counter()
+
         try:
             text = Path(document.extracted_text_path).read_text(encoding="utf-8")
 
             try:
+                chunking_start = time.perf_counter()
                 # asyncio.to_thread: chunking is synchronous, CPU-bound
                 # work (tiktoken tokenization across up to 3 hierarchical
                 # levels) that previously ran directly on the event loop,
@@ -118,6 +145,7 @@ class IndexingService:
             except Exception:
                 logger.exception("Document %s failed during chunking", document_id)
                 raise
+            chunking_duration = time.perf_counter() - chunking_start
 
             # The raw extracted text and the HierarchicalChunk objects are
             # both fully redundant the moment TextNodes are built from them
@@ -136,7 +164,6 @@ class IndexingService:
             gc.collect()
 
             try:
-                storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
                 # Same reasoning as the chunking step above -- ONNX
                 # Runtime inference across every chunk (and, on the very
                 # first indexing request in the process's lifetime, the
@@ -149,9 +176,15 @@ class IndexingService:
                 # actual computation, which is what makes offloading to a
                 # thread (not just moving the same blocking problem
                 # elsewhere) genuinely effective here.
-                await asyncio.to_thread(
-                    _build_vector_index, nodes, storage_context, self.embed_model
+                embedding_start = time.perf_counter()
+                await asyncio.to_thread(_embed_nodes, nodes, self.embed_model)
+                embedding_duration = time.perf_counter() - embedding_start
+
+                qdrant_start = time.perf_counter()
+                written_ids = await asyncio.to_thread(
+                    _write_nodes_to_vector_store, nodes, self.vector_store
                 )
+                qdrant_duration = time.perf_counter() - qdrant_start
             except Exception:
                 logger.exception(
                     "Document %s failed while embedding/storing %d chunk(s) "
@@ -177,6 +210,20 @@ class IndexingService:
         document.embeddings = chunk_count
         document.index_status = "INDEXED"
         await self.session.commit()
-        logger.info("Document %s -> INDEXED (%d chunks)", document_id, chunk_count)
+        pipeline_duration = time.perf_counter() - pipeline_start
+        logger.info(
+            "Document %s -> INDEXED (%d chunks) | timing: total=%.3fs "
+            "chunking=%.3fs (%d chunks) embedding=%.3fs (batch_size=%d) "
+            "qdrant_write=%.3fs (%d vectors written)",
+            document_id,
+            chunk_count,
+            pipeline_duration,
+            chunking_duration,
+            chunk_count,
+            embedding_duration,
+            self.embed_model.embed_batch_size,
+            qdrant_duration,
+            len(written_ids),
+        )
 
         return {"document_id": str(document_id), "chunks_indexed": chunk_count}

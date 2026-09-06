@@ -7,9 +7,9 @@ import { Badge } from "@/components/ui/badge";
 
 const MODELS = [
   {
-    id: "llama-3.3-70b-versatile",
-    label: "Llama 3.3 70B",
-    description: "Served via Groq — fast inference, strong general-purpose quality.",
+    id: "openai/gpt-oss-120b",
+    label: "GPT-OSS 120B",
+    description: "Served via Groq — fast inference with strong reasoning and tool use.",
     enabled: true,
   },
   { id: "gpt-4", label: "GPT-4", description: "OpenAI", enabled: false },

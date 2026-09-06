@@ -22,7 +22,7 @@ import { StepReview } from "@/components/create-copilot/step-review";
 import { SequenceLoader, type SequenceStepDef } from "@/components/shared/sequence-loader";
 import { LaunchCopilotButton } from "@/components/shared/launch-copilot-button";
 
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = "openai/gpt-oss-120b";
 const CREATION_STEPS: SequenceStepDef[] = [
   { id: "create", label: "Setting up your copilot" },
   { id: "metadata", label: "Saving your configuration" },
@@ -141,9 +141,6 @@ export default function CreateCopilotWizardPage() {
       );
     }
 
-    // Animation finished and the copilot genuinely exists on the backend
-    // -- let the user choose what happens next, rather than launching
-    // straight into chat automatically.
     if (animationDone && createdCopilot) {
       return (
         <div className="mx-auto flex max-w-md flex-col items-center gap-5 py-16 text-center">

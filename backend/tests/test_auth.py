@@ -3,6 +3,8 @@
 import pytest
 from httpx import AsyncClient
 
+from app.llm.providers import LLMProvider, to_litellm_model
+
 AUTH_BASE = "/api/v1/auth"
 
 
@@ -207,3 +209,31 @@ async def test_list_organizations_scoped_to_own_org_for_non_super_admin(
     orgs = response.json()
     assert len(orgs) == 1
     assert orgs[0]["name"] == "Scoped Org"
+
+
+def test_groq_prefixes_openai_style_model_name():
+    assert (
+        to_litellm_model(LLMProvider.GROQ, "openai/gpt-oss-120b")
+        == "groq/openai/gpt-oss-120b"
+    )
+
+
+def test_groq_prefixes_bare_model_name():
+    assert (
+        to_litellm_model(LLMProvider.GROQ, "gpt-oss-120b")
+        == "groq/gpt-oss-120b"
+    )
+
+
+def test_groq_does_not_double_prefix_already_qualified_model():
+    assert (
+        to_litellm_model(
+            LLMProvider.GROQ,
+            "groq/openai/gpt-oss-120b",
+        )
+        == "groq/openai/gpt-oss-120b"
+    )
+
+
+def test_openai_model_unchanged():
+    assert to_litellm_model(LLMProvider.OPENAI, "gpt-4o") == "gpt-4o"

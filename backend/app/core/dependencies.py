@@ -306,6 +306,7 @@ async def get_chat_orchestrator(
     guardrails: GuardrailsRuntimeDep,
     workflow: ChatWorkflowDep,
     copilot_service: CopilotServiceDep,
+    document_service: DocumentServiceDep,
 ) -> ChatOrchestratorService:
     return ChatOrchestratorService(
         settings,
@@ -313,6 +314,7 @@ async def get_chat_orchestrator(
         guardrails,
         workflow,
         copilot_service,
+        document_service,
     )
 
 

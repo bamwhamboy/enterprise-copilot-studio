@@ -38,6 +38,18 @@ class HierarchicalChunk(BaseModel):
 class Citation(BaseModel):
     """What a retrieved chunk exposes to a (future) copilot response."""
 
+    # Stable identity (Document.id, as stored in Qdrant under the
+    # "source_document_id" payload key -- see citation_builder.py). Kept
+    # alongside document_name (a mutable display label, not a safe
+    # identity key) rather than replacing it: citations need both a
+    # human-readable name and a stable id two documents can never
+    # collide on, even if identically named. Defaults to "" (same
+    # fallback style as knowledge_source_id below) rather than being
+    # required, so existing callers that predate this field -- direct
+    # Citation(...) construction elsewhere in the codebase, not just
+    # build_citation() -- keep working unmodified; build_citation()
+    # itself always populates the real value explicitly.
+    document_id: str = ""
     document_name: str
     knowledge_source_id: str
     page_number: int | None = None

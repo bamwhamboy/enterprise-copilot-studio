@@ -33,12 +33,17 @@ def make_retrieval_node(
             query = query_rewriter.rewrite(query)
 
         node_results = retriever.retrieve(
-            query, knowledge_source_id=state.get("knowledge_source_id")
+            query,
+            knowledge_source_id=state.get("knowledge_source_id"),
+            document_id=state.get("document_id"),
         )
         retrieved = build_retrieved_chunks(node_results)
 
         if settings.RAG_RERANK_ENABLED:
-            retrieved = reranker.rerank(query, retrieved)
+           retrieved = reranker.rerank(query, retrieved)
+
+    # Keep only the final number of chunks after reranking.
+        retrieved = retrieved[: settings.HYBRID_FINAL_TOP_K]
 
         confidence = confidence_scorer.score(retrieved)
         compressed = compression.compress(retrieved)

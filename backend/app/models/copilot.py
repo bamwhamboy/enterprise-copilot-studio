@@ -57,7 +57,7 @@ class Copilot(Base):
     # newly-created copilot's own default doesn't drift from the platform
     # default -- both should point at the same current, real model id.
     model: Mapped[str] = mapped_column(
-        String(100), nullable=False, default="llama-3.3-70b-versatile"
+        String(100), nullable=False, default="openai/gpt-oss-120b"
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -72,30 +72,41 @@ class HybridRetriever:
         self,
         knowledge_source_id: str | None,
         knowledge_source_ids: list[str] | None,
+        document_id: str | None = None,
     ) -> Filter | None:
+        must = []
+
         if knowledge_source_id:
-            return Filter(
-                must=[
-                    FieldCondition(
-                        key="knowledge_source_id", match=MatchValue(value=knowledge_source_id)
-                    )
-                ]
+            must.append(
+                FieldCondition(
+                    key="knowledge_source_id",
+                    match=MatchValue(value=knowledge_source_id),
+                )
             )
-        if knowledge_source_ids:
-            return Filter(
-                must=[
-                    FieldCondition(
-                        key="knowledge_source_id", match=MatchAny(any=knowledge_source_ids)
-                    )
-                ]
+        elif knowledge_source_ids:
+            must.append(
+                FieldCondition(
+                    key="knowledge_source_id",
+                    match=MatchAny(any=knowledge_source_ids),
+                )
             )
-        return None
+
+        if document_id:
+            must.append(
+                FieldCondition(
+                    key="source_document_id",
+                    match=MatchValue(value=document_id),
+                )
+            )
+
+        return Filter(must=must) if must else None
 
     def _fetch_corpus_nodes(
         self,
         *,
         knowledge_source_id: str | None,
         knowledge_source_ids: list[str] | None,
+        document_id: str | None = None,
         limit: int = 1000,
     ) -> list[TextNode]:
         """Scroll matching chunks from Qdrant to build a BM25 corpus.
@@ -105,7 +116,11 @@ class HybridRetriever:
         would maintain a persisted, incrementally-updated BM25 index
         instead of reconstructing it per request.
         """
-        query_filter = self._build_qdrant_filter(knowledge_source_id, knowledge_source_ids)
+        query_filter = self._build_qdrant_filter(
+            knowledge_source_id,
+            knowledge_source_ids,
+            document_id,
+        )
         points, _ = self._client.scroll(
             collection_name=self._settings.QDRANT_COLLECTION_NAME,
             scroll_filter=query_filter,
@@ -123,30 +138,45 @@ class HybridRetriever:
         return nodes
 
     @staticmethod
-    def _to_llama_filters(knowledge_source_id: str | None, knowledge_source_ids: list[str] | None):
+    def _to_llama_filters(
+        knowledge_source_id: str | None,
+        knowledge_source_ids: list[str] | None,
+        document_id: str | None = None,
+    ):
+        from llama_index.core.vector_stores.types import (
+            ExactMatchFilter,
+            FilterOperator,
+            MetadataFilter,
+            MetadataFilters,
+        )
+
+        filters = []
+
         if knowledge_source_id:
-            from llama_index.core.vector_stores.types import ExactMatchFilter, MetadataFilters
+            filters.append(
+                ExactMatchFilter(
+                    key="knowledge_source_id",
+                    value=knowledge_source_id,
+                )
+            )
+        elif knowledge_source_ids:
+            filters.append(
+                MetadataFilter(
+                    key="knowledge_source_id",
+                    value=knowledge_source_ids,
+                    operator=FilterOperator.IN,
+                )
+            )
 
-            return MetadataFilters(
-                filters=[ExactMatchFilter(key="knowledge_source_id", value=knowledge_source_id)]
-            )
-        if knowledge_source_ids:
-            from llama_index.core.vector_stores.types import (
-                FilterOperator,
-                MetadataFilter,
-                MetadataFilters,
+        if document_id:
+            filters.append(
+                ExactMatchFilter(
+                    key="source_document_id",
+                    value=document_id,
+                )
             )
 
-            return MetadataFilters(
-                filters=[
-                    MetadataFilter(
-                        key="knowledge_source_id",
-                        value=knowledge_source_ids,
-                        operator=FilterOperator.IN,
-                    )
-                ]
-            )
-        return None
+        return MetadataFilters(filters=filters) if filters else None
 
     def retrieve(
         self,
@@ -157,6 +187,7 @@ class HybridRetriever:
         semantic_top_k: int | None = None,
         bm25_top_k: int | None = None,
         final_top_k: int | None = None,
+        document_id: str | None = None,
     ) -> list[NodeWithScore]:
         """Run semantic + BM25 retrieval and fuse the results via RRF.
 
@@ -183,7 +214,11 @@ class HybridRetriever:
         )
         semantic_retriever = index.as_retriever(
             similarity_top_k=semantic_top_k,
-            filters=self._to_llama_filters(knowledge_source_id, knowledge_source_ids),
+            filters=self._to_llama_filters(
+                knowledge_source_id,
+                knowledge_source_ids,
+                document_id,
+            ),
         )
         semantic_results = semantic_retriever.retrieve(query)
 
@@ -191,6 +226,7 @@ class HybridRetriever:
         corpus_nodes = self._fetch_corpus_nodes(
             knowledge_source_id=knowledge_source_id,
             knowledge_source_ids=knowledge_source_ids,
+            document_id=document_id,
         )
         bm25_results: list[NodeWithScore] = []
         if corpus_nodes:
