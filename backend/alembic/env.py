@@ -27,7 +27,10 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Use the application's own settings rather than a hardcoded URL in alembic.ini.
-config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
+config.set_main_option(
+    "sqlalchemy.url",
+    get_settings().DATABASE_URL.replace("%", "%%"),
+)
 
 target_metadata = Base.metadata
 

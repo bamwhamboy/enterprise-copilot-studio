@@ -63,8 +63,7 @@ class ResponseEvaluator:
                     "available rather than infer or invent it."
                 ),
                 user_prompt=(
-                    "Question:\n{query}\n\n"
-                    "Retrieved context:\n{context}\n\n"
+                    "Retrieved information:\n{input_data}\n\n"
                     "Candidate answer:\n{output}\n\n"
                     "Determine whether the candidate answer is fully grounded "
                     "in the retrieved context. Be strict."
@@ -92,9 +91,13 @@ class ResponseEvaluator:
         if self._scorer is None:
             raise RuntimeError("Response evaluator is not available")
 
+        evaluation_context = (
+            f"Question:\n{query}\n\n"
+            f"Retrieved context:\n{context}"
+        )
+
         result = await self._scorer.score(
-            query=query,
-            context=context,
+            context=evaluation_context,
             output=answer,
         )
 
