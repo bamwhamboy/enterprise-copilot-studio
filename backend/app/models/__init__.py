@@ -8,6 +8,7 @@ metadata) discovers them via this single package.
 from app.models.copilot import Copilot, copilot_knowledge_sources
 from app.models.conversation import ConversationMessage, ConversationSession
 from app.models.document import Document
+from app.models.graph import GraphEntity, GraphEvidence, GraphRelationship
 from app.models.knowledge_source import KnowledgeSource
 from app.models.organization import Organization
 from app.models.refresh_token import RefreshToken
@@ -25,4 +26,7 @@ __all__ = [
     "Role",
     "User",
     "RefreshToken",
+    "GraphEntity",
+    "GraphRelationship",
+    "GraphEvidence",
 ]

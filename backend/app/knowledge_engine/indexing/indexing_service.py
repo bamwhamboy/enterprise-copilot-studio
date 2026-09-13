@@ -4,6 +4,15 @@ Orchestrates the "when a document has been successfully parsed" flow:
 read its extracted text -> hierarchical chunking -> embed + store each
 chunk in Qdrant -> update the Document row's chunk/embedding counts and
 ``index_status`` in Postgres.
+
+Also (additively, since Graph RAG) runs graph extraction against the
+same hierarchical chunks once they exist, before the vector/embedding
+step -- see ``index_document`` for exactly where and why. Graph
+extraction is entirely independent of the vector path: it reuses the
+chunks already produced by ``self.chunker``, never re-reads the
+document or re-chunks it, and a graph extraction failure (partial or
+total) can never fail the document's indexing or change
+``index_status`` away from what vector indexing alone would have set.
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ import gc
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.schema import MetadataMode, TextNode
@@ -25,6 +34,14 @@ from app.core.logging import get_logger
 from app.knowledge_engine.chunking.hierarchical_chunker import HierarchicalChunker
 from app.knowledge_engine.models import HierarchicalChunk
 from app.repositories.document_repository import DocumentRepository
+
+# Deferred to TYPE_CHECKING only -- app.knowledge_engine.graph.graph_extraction_service
+# imports app.knowledge_engine.graph.extractor, which imports LLMGateway/litellm.
+# See app/core/dependencies.py's get_graph_extraction_service for why that cost
+# must only be paid when graph extraction is actually enabled, not merely by
+# importing this module (which happens unconditionally at app startup).
+if TYPE_CHECKING:
+    from app.knowledge_engine.graph.graph_extraction_service import GraphExtractionService
 
 logger = get_logger(__name__)
 
@@ -92,12 +109,19 @@ class IndexingService:
         chunker: HierarchicalChunker,
         embed_model: BaseEmbedding,
         vector_store: QdrantVectorStore,
+        graph_extraction_service: GraphExtractionService | None = None,
     ) -> None:
         self.session = session
         self.repository = DocumentRepository(session)
         self.chunker = chunker
         self.embed_model = embed_model
         self.vector_store = vector_store
+        # Optional and additive -- None (the default) means graph
+        # extraction is skipped entirely, and vector indexing is
+        # completely unaffected either way. See app/core/dependencies.py
+        # for how/when this actually gets constructed (gated behind
+        # settings.GRAPH_EXTRACTION_ENABLED).
+        self.graph_extraction_service = graph_extraction_service
 
     async def index_document(self, document_id: uuid.UUID) -> dict[str, Any]:
         document = await self.repository.get(document_id)
@@ -146,6 +170,19 @@ class IndexingService:
                 logger.exception("Document %s failed during chunking", document_id)
                 raise
             chunking_duration = time.perf_counter() - chunking_start
+
+            # Graph RAG extraction runs here deliberately: chunks exist
+            # (just produced above) but haven't been released yet (that
+            # happens a few lines below, via `del text, chunks`), and
+            # vector indexing hasn't started. This is purely additive --
+            # see _run_graph_extraction's docstring for why nothing it
+            # does can affect vector indexing's outcome or this
+            # document's index_status.
+            graph_extraction_summary: dict[str, Any] = (
+                await self._run_graph_extraction(document.id, chunks)
+                if self.graph_extraction_service is not None
+                else {"status": "skipped"}
+            )
 
             # The raw extracted text and the HierarchicalChunk objects are
             # both fully redundant the moment TextNodes are built from them
@@ -226,4 +263,71 @@ class IndexingService:
             len(written_ids),
         )
 
-        return {"document_id": str(document_id), "chunks_indexed": chunk_count}
+        return {
+            "document_id": str(document_id),
+            "chunks_indexed": chunk_count,
+            "graph_extraction": graph_extraction_summary,
+        }
+
+    async def _run_graph_extraction(
+        self, document_id: uuid.UUID, chunks: list[HierarchicalChunk]
+    ) -> dict[str, Any]:
+        """Runs Graph RAG extraction against the exact same chunks vector
+        indexing is about to use, and returns a summary dict -- but never
+        lets a graph extraction failure propagate out of this method.
+
+        ``GraphExtractionService.extract_for_document`` already isolates
+        per-chunk failures internally (one bad chunk's LLM/DB error
+        doesn't stop the rest of the document's graph extraction). This
+        try/except is the *outer* safety net, for anything that could go
+        wrong outside that per-chunk loop -- so regardless of what
+        breaks here, vector indexing is guaranteed to run immediately
+        after this returns, and this document's ``index_status`` is
+        never affected by graph extraction's outcome.
+        """
+        try:
+            result = await self.graph_extraction_service.extract_for_document(
+                document_id, chunks
+            )
+        except Exception:
+            logger.exception(
+                "Document %s: graph extraction failed entirely; continuing "
+                "with vector indexing",
+                document_id,
+            )
+            return {
+                "status": "failed",
+                "error": "graph extraction raised an unexpected error",
+            }
+
+        if result.chunks_failed:
+            logger.warning(
+                "Document %s: graph extraction completed with %d/%d chunk "
+                "failure(s): %s",
+                document_id,
+                result.chunks_failed,
+                result.chunks_processed,
+                [error.chunk_id for error in result.errors],
+            )
+            status = "partial" if result.chunks_succeeded else "failed"
+        else:
+            logger.info(
+                "Document %s: graph extraction complete (%d entities, %d "
+                "relationships, %d evidence, %d chunks)",
+                document_id,
+                result.entities_created,
+                result.relationships_created,
+                result.evidence_created,
+                result.chunks_processed,
+            )
+            status = "completed"
+
+        return {
+            "status": status,
+            "chunks_processed": result.chunks_processed,
+            "chunks_succeeded": result.chunks_succeeded,
+            "chunks_failed": result.chunks_failed,
+            "entities_created": result.entities_created,
+            "relationships_created": result.relationships_created,
+            "evidence_created": result.evidence_created,
+        }

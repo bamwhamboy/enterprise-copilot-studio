@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     RESPONSE_EVALUATOR_MODEL: str = "groq/openai/gpt-oss-20b"
     RESPONSE_MAX_EVALUATION_ATTEMPTS: int = 2
 
+    # --- Graph RAG extraction --------------------------------------------
+    # Off by default: this is additive to indexing.
+    GRAPH_EXTRACTION_ENABLED: bool = False
+
+
     # --- Enterprise Hybrid Hierarchical RAG (Sprint 3B) -----------------------
     QDRANT_COLLECTION_NAME: str = "knowledge_chunks"
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"

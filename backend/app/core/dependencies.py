@@ -62,6 +62,7 @@ from app.tool_calling.tools.knowledge_search_tool import KnowledgeSearchTool
 # pipeline's out-of-memory crashes on Render's 512MB tier. TYPE_CHECKING
 # keeps static type checkers happy without adding a real runtime import.
 if TYPE_CHECKING:
+    from app.knowledge_engine.graph.graph_extraction_service import GraphExtractionService
     from app.llm.gateway import LLMGateway
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -203,13 +204,47 @@ async def get_hierarchical_chunker(settings: SettingsDep) -> HierarchicalChunker
 HierarchicalChunkerDep = Annotated[HierarchicalChunker, Depends(get_hierarchical_chunker)]
 
 
+async def get_graph_extraction_service(
+    session: DbSessionDep, settings: SettingsDep
+) -> GraphExtractionService | None:
+    """Returns None -- no import cost paid at all -- unless graph
+    extraction is enabled via ``settings.GRAPH_EXTRACTION_ENABLED``
+    (see that setting's docstring in app/core/config.py).
+
+    Imports deferred to call time, same reasoning as ``get_llm_gateway``
+    above: this pulls in ``app.knowledge_engine.graph.extractor``, which
+    itself imports ``LLMGateway``/litellm. Reuses ``get_llm_gateway``
+    directly (a plain function call, not a second ``Depends(...)``) so
+    that cost is only ever paid once graph extraction is actually
+    enabled, not merely declared as a dependency.
+    """
+    if not settings.GRAPH_EXTRACTION_ENABLED:
+        return None
+
+    from app.knowledge_engine.graph.extractor import GraphExtractor
+    from app.knowledge_engine.graph.graph_extraction_service import GraphExtractionService
+
+    gateway = await get_llm_gateway(settings)
+    return GraphExtractionService(session, GraphExtractor(gateway))
+
+
+GraphExtractionServiceDep = Annotated[object, Depends(get_graph_extraction_service)]
+
+
 async def get_indexing_service(
     session: DbSessionDep,
     chunker: HierarchicalChunkerDep,
     embed_model: EmbedModelDep,
     vector_store: VectorStoreDep,
+    graph_extraction_service: GraphExtractionServiceDep,
 ) -> IndexingService:
-    return IndexingService(session, chunker, embed_model, vector_store)
+    return IndexingService(
+        session,
+        chunker,
+        embed_model,
+        vector_store,
+        graph_extraction_service=graph_extraction_service,
+    )
 
 
 IndexingServiceDep = Annotated[IndexingService, Depends(get_indexing_service)]
