@@ -289,28 +289,42 @@ class IndexingService:
             result = await self.graph_extraction_service.extract_for_document(
                 document_id, chunks
             )
-        except Exception:
+        except Exception as exc:
+            # Bug fix: previously logged only a generic message with no
+            # detail on *why* -- indistinguishable in logs from a
+            # config/wiring problem vs. a real, diagnosable error.
             logger.exception(
-                "Document %s: graph extraction failed entirely; continuing "
-                "with vector indexing",
+                "Document %s: graph extraction failed entirely (%s); "
+                "continuing with vector indexing",
                 document_id,
+                exc,
             )
             return {
                 "status": "failed",
-                "error": "graph extraction raised an unexpected error",
+                "error": str(exc),
             }
 
         if result.chunks_failed:
+            # Bug fix: this previously logged only [error.chunk_id, ...],
+            # which tells you *which* chunks failed but never *why* --
+            # e.g. an auth/config error that fails every single chunk
+            # identically was completely invisible here. Cap the sample
+            # so 184 identical auth failures don't flood the log.
+            sample_errors = [
+                {"chunk_id": error.chunk_id, "error": error.error}
+                for error in result.errors[:5]
+            ]
             logger.warning(
                 "Document %s: graph extraction completed with %d/%d chunk "
-                "failure(s): %s",
+                "failure(s), e.g. %s",
                 document_id,
                 result.chunks_failed,
                 result.chunks_processed,
-                [error.chunk_id for error in result.errors],
+                sample_errors,
             )
             status = "partial" if result.chunks_succeeded else "failed"
         else:
+            sample_errors = []
             logger.info(
                 "Document %s: graph extraction complete (%d entities, %d "
                 "relationships, %d evidence, %d chunks)",
@@ -330,4 +344,5 @@ class IndexingService:
             "entities_created": result.entities_created,
             "relationships_created": result.relationships_created,
             "evidence_created": result.evidence_created,
+            "sample_errors": sample_errors,
         }

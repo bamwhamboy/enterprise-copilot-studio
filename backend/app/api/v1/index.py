@@ -24,4 +24,5 @@ async def index_document(
         document_id=document_id,
         chunks_indexed=result["chunks_indexed"],
         index_status="INDEXED",
+        graph_extraction=result.get("graph_extraction"),
     )

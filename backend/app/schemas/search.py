@@ -30,3 +30,9 @@ class IndexDocumentResponse(BaseModel):
     document_id: uuid.UUID
     chunks_indexed: int
     index_status: str
+    # Bug fix: previously this field didn't exist at all, so a graph
+    # extraction failure (partial or total) was completely invisible
+    # from the API response -- indistinguishable from full success.
+    # None only when graph extraction is disabled entirely (see
+    # IndexingService._run_graph_extraction's {"status": "skipped"}).
+    graph_extraction: dict | None = None

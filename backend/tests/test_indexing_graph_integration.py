@@ -228,3 +228,100 @@ async def test_partial_graph_failure_through_real_service_does_not_affect_indexi
 
     get_response = await client.get(f"{DOC_BASE}/{doc['id']}", headers=headers)
     assert get_response.json()["index_status"] == "INDEXED"
+
+    # Bug fix regression: the failure summary must now be visible in
+    # the API response itself, including the actual error message per
+    # chunk (previously only chunk_ids were logged, and nothing at all
+    # was returned from the endpoint).
+    graph_extraction = body["graph_extraction"]
+    assert graph_extraction["status"] == "failed"
+    assert graph_extraction["chunks_failed"] == graph_extraction["chunks_processed"]
+    assert graph_extraction["entities_created"] == 0
+    assert len(graph_extraction["sample_errors"]) > 0
+    assert graph_extraction["sample_errors"][0]["error"]  # non-empty real message
+
+
+# --- Regression: successful extraction actually persists end-to-end -------
+
+
+_SUCCESS_JSON = """{
+  "entities": [
+    {"name": "Acme Corp", "canonical_name": "acme corp", "entity_type": "organization"},
+    {"name": "Globex LLC", "canonical_name": "globex llc", "entity_type": "organization"}
+  ],
+  "relationships": [
+    {"source_entity": "acme corp", "target_entity": "globex llc", \
+"relationship_type": "provides_services_to", "confidence": 0.9}
+  ]
+}"""
+
+
+class _AlwaysSuccessfulGateway:
+    """A fake LLM gateway that returns well-formed, successful
+    extraction JSON for every call -- verifies rows are actually
+    persisted end-to-end through the real IndexingService ->
+    GraphExtractionService -> repository -> session path, not just
+    that the service gets invoked (the recording fake above proves
+    invocation; this proves persistence)."""
+
+    async def generate(self, request):
+        return SimpleNamespace(content=_SUCCESS_JSON)
+
+
+@pytest.mark.asyncio
+async def test_successful_graph_extraction_persists_rows_through_real_indexing(
+    client: AsyncClient, register_and_login
+) -> None:
+    from app.knowledge_engine.graph.extractor import GraphExtractor
+    from app.knowledge_engine.graph.graph_extraction_service import GraphExtractionService
+    from app.database.session import AsyncSessionLocal
+    from app.models.graph import GraphEntity, GraphEvidence, GraphRelationship
+    from sqlalchemy import select
+
+    async def _override_with_real_successful_service(session: DbSessionDep):
+        return GraphExtractionService(session, GraphExtractor(_AlwaysSuccessfulGateway()))
+
+    app.dependency_overrides[get_graph_extraction_service] = _override_with_real_successful_service
+
+    headers = _auth_headers(await register_and_login(email="idxgraph4@example.com"))
+    ks_id = await _create_knowledge_source(client, headers, "Graph Success Source")
+    doc = await _upload_pdf(
+        client,
+        headers,
+        ks_id,
+        "vendor_agreement4.pdf",
+        pages=["Acme Corp shall provide services to Globex LLC. " * 20],
+    )
+
+    response = await client.post(f"/api/v1/index/{doc['id']}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["index_status"] == "INDEXED"
+
+    graph_extraction = body["graph_extraction"]
+    assert graph_extraction["status"] == "completed"
+    assert graph_extraction["entities_created"] == 2
+    assert graph_extraction["relationships_created"] == 1
+    assert graph_extraction["evidence_created"] > 0
+
+    document_id = uuid.UUID(doc["id"])
+    async with AsyncSessionLocal() as session:
+        entities = (
+            await session.execute(
+                select(GraphEntity).where(GraphEntity.document_id == document_id)
+            )
+        ).scalars().all()
+        relationships = (
+            await session.execute(
+                select(GraphRelationship).where(GraphRelationship.document_id == document_id)
+            )
+        ).scalars().all()
+        evidence_rows = (
+            await session.execute(
+                select(GraphEvidence).where(GraphEvidence.document_id == document_id)
+            )
+        ).scalars().all()
+
+        assert len(entities) == 2
+        assert len(relationships) == 1
+        assert len(evidence_rows) > 0
