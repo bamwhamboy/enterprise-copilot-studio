@@ -22,6 +22,20 @@ document (e.g. after a re-index) reuses existing rows instead of
 duplicating them -- the DB constraint is the backstop if two
 extraction runs ever race.
 
+Canonical-name normalization: the LLM's ``canonical_name`` for the same
+real-world entity can vary in trivial, non-semantic ways across chunks
+-- "registration_fees" in one chunk, "registration fees" in another.
+Since entity resolution keys on ``canonical_name`` exactly, this alone
+was enough to create duplicate entities for the same thing.
+``normalize_canonical_name`` below is applied consistently everywhere
+a canonical name is used for lookup, caching, or persistence (entity
+resolution AND relationship source/target resolution), so those two
+strings resolve to one entity. This is deliberately *syntactic* only
+(whitespace/case/separator normalization) -- it never merges names
+that are merely semantically similar; "federal awards" and "federally
+sponsored awards" remain distinct entities since their normalized
+forms differ.
+
 Failure isolation: each chunk's extraction + persistence is wrapped in
 its own try/except and its own commit. A chunk that fails (malformed
 LLM output, an unexpected DB error) is recorded in the returned
@@ -31,6 +45,7 @@ document from being processed.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 
@@ -47,6 +62,35 @@ from app.repositories.graph_repository import (
 )
 
 logger = get_logger(__name__)
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def normalize_canonical_name(name: str) -> str:
+    """Deterministic, syntactic-only normalization for a canonical
+    entity name -- the single function used everywhere a canonical
+    name is looked up, cached, or persisted, so entity/relationship
+    resolution is consistent across chunks.
+
+    Strips surrounding whitespace, lowercases, replaces underscores
+    and hyphens with spaces, and collapses repeated whitespace. Does
+    NOT perform semantic normalization, stemming, or synonym merging:
+    two names with different words (or different meaning) always stay
+    distinct here even if a human would consider them related --
+    that kind of merging is out of scope for this function on purpose.
+
+    >>> normalize_canonical_name("registration_fees")
+    'registration fees'
+    >>> normalize_canonical_name("Registration   Fees")
+    'registration fees'
+    >>> normalize_canonical_name("federally sponsored awards") == \
+normalize_canonical_name("federal awards")
+    False
+    """
+    normalized = name.strip().lower()
+    normalized = normalized.replace("_", " ").replace("-", " ")
+    normalized = _WHITESPACE_RE.sub(" ", normalized)
+    return normalized.strip()
 
 
 @dataclass
@@ -102,10 +146,13 @@ class GraphExtractionService:
         # chunks (e.g. "Acme Corp" mentioned in several paragraphs)
         # resolve to the same row instead of being re-queried/re-created
         # every time -- keyed exactly on the natural key the DB
-        # constraint covers.
+        # constraint covers, with the canonical name normalized so
+        # e.g. "registration_fees" and "registration fees" share one
+        # cache entry.
         entity_cache: dict[tuple[str, str], GraphEntity] = {}
         for existing in await self.entities.list_for_document(document_id):
-            entity_cache[(existing.canonical_name, existing.entity_type)] = existing
+            key = (normalize_canonical_name(existing.canonical_name), existing.entity_type)
+            entity_cache[key] = existing
 
         for chunk in chunks:
             result.chunks_processed += 1
@@ -165,29 +212,39 @@ class GraphExtractionService:
 
         chunk_entities: dict[str, GraphEntity] = {}
         for extracted in extraction.entities:
-            key = (extracted.canonical_name, extracted.entity_type)
+            # Normalized once here, and used identically for the cache
+            # key, the DB lookup, and (further below) what actually
+            # gets persisted -- so all three agree on what counts as
+            # "the same" canonical name.
+            canonical_name = normalize_canonical_name(extracted.canonical_name)
+            key = (canonical_name, extracted.entity_type)
             entity = entity_cache.get(key)
             if entity is None:
                 entity = await self.entities.find_by_canonical_name(
                     document_id=document_id,
-                    canonical_name=extracted.canonical_name,
+                    canonical_name=canonical_name,
                     entity_type=extracted.entity_type,
                 )
             if entity is None:
                 entity = GraphEntity(
                     document_id=document_id,
                     name=extracted.name,
-                    canonical_name=extracted.canonical_name,
+                    canonical_name=canonical_name,
                     entity_type=extracted.entity_type,
                 )
                 await self.entities.create(entity)
                 counts.entities_created += 1
             entity_cache[key] = entity
-            chunk_entities[extracted.canonical_name] = entity
+            chunk_entities[canonical_name] = entity
 
         for extracted_rel in extraction.relationships:
-            source = chunk_entities.get(extracted_rel.source_entity)
-            target = chunk_entities.get(extracted_rel.target_entity)
+            # Same normalization applied to the relationship's
+            # source/target references before looking them up in
+            # chunk_entities -- otherwise "registration_fees" as a
+            # relationship's source_entity would fail to match an
+            # entity cached under the normalized key "registration fees".
+            source = chunk_entities.get(normalize_canonical_name(extracted_rel.source_entity))
+            target = chunk_entities.get(normalize_canonical_name(extracted_rel.target_entity))
             if source is None or target is None:
                 # Belt-and-suspenders: GraphExtractor already validates
                 # this, but a chunk's persistence should never trust an

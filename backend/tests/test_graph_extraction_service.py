@@ -566,3 +566,221 @@ async def test_evidence_cannot_reference_relationship_from_different_document(
         )
         with pytest.raises(IntegrityError):
             await session.commit()
+
+
+# --- Canonical-name normalization -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_underscore_and_space_canonical_names_resolve_to_one_entity(
+    client: AsyncClient, register_and_login
+) -> None:
+    """registration_fees (chunk 1) and registration fees (chunk 2) are
+    the same real-world entity, just phrased differently by the LLM --
+    must resolve to a single GraphEntity row, not two."""
+    headers = _auth_headers(await register_and_login(email="graphnorm1@example.com"))
+    document_id = await _create_document(client, headers, "Fee Schedule Agreement")
+
+    chunk1_json = """{
+      "entities": [
+        {"name": "Registration Fees", "canonical_name": "registration_fees", "entity_type": "term"}
+      ],
+      "relationships": []
+    }"""
+    chunk2_json = """{
+      "entities": [
+        {"name": "registration fees", "canonical_name": "registration fees", "entity_type": "term"}
+      ],
+      "relationships": []
+    }"""
+
+    chunks = [
+        _chunk(document_id, "node-0001", "Registration_Fees are due within 30 days."),
+        _chunk(document_id, "node-0002", "The registration fees are non-refundable."),
+    ]
+    gateway = _FakeGateway([chunk1_json, chunk2_json])
+    extractor = GraphExtractor(gateway, min_request_interval_seconds=0)
+
+    async with AsyncSessionLocal() as session:
+        service = GraphExtractionService(session, extractor)
+        result = await service.extract_for_document(document_id, chunks)
+
+    assert result.chunks_succeeded == 2
+    # Only ONE entity created total -- the second chunk's differently
+    # -spelled canonical_name resolved to the entity from chunk 1
+    # rather than creating a duplicate.
+    assert result.entities_created == 1
+
+    async with AsyncSessionLocal() as session:
+        entities = (
+            await session.execute(
+                select(GraphEntity).where(GraphEntity.document_id == document_id)
+            )
+        ).scalars().all()
+        assert len(entities) == 1
+        assert entities[0].canonical_name == "registration fees"
+
+
+@pytest.mark.asyncio
+async def test_relationship_resolves_across_chunks_via_either_representation(
+    client: AsyncClient, register_and_login
+) -> None:
+    """chunk 1 introduces "registration_fees" (underscore form) with no
+    relationship. chunk 2 re-mentions the same entity under its space
+    form and creates a relationship from it -- the relationship's
+    source_entity must resolve to the SAME entity chunk 1 created, not
+    a second, duplicate one."""
+    headers = _auth_headers(await register_and_login(email="graphnorm2@example.com"))
+    document_id = await _create_document(client, headers, "Fee Schedule Agreement 2")
+
+    chunk1_json = """{
+      "entities": [
+        {"name": "Registration Fees", "canonical_name": "registration_fees", "entity_type": "term"}
+      ],
+      "relationships": []
+    }"""
+    chunk2_json = """{
+      "entities": [
+        {"name": "registration fees", "canonical_name": "registration fees", "entity_type": "term"},
+        {"name": "Late Fee", "canonical_name": "late_fee", "entity_type": "term"}
+      ],
+      "relationships": [
+        {"source_entity": "registration fees", "target_entity": "late_fee", \
+"relationship_type": "distinct_from", "confidence": 0.8}
+      ]
+    }"""
+
+    chunks = [
+        _chunk(document_id, "node-0001", "Registration_Fees are due within 30 days."),
+        _chunk(document_id, "node-0002", "registration fees differ from the late_fee."),
+    ]
+    gateway = _FakeGateway([chunk1_json, chunk2_json])
+    extractor = GraphExtractor(gateway, min_request_interval_seconds=0)
+
+    async with AsyncSessionLocal() as session:
+        service = GraphExtractionService(session, extractor)
+        result = await service.extract_for_document(document_id, chunks)
+
+    assert result.chunks_succeeded == 2
+    assert result.entities_created == 2  # registration fees + late fee, no duplicate
+    assert result.relationships_created == 1
+
+    async with AsyncSessionLocal() as session:
+        entities = (
+            await session.execute(
+                select(GraphEntity).where(GraphEntity.document_id == document_id)
+            )
+        ).scalars().all()
+        assert len(entities) == 2
+        registration_fees = next(e for e in entities if e.canonical_name == "registration fees")
+
+        relationship = (
+            await session.execute(
+                select(GraphRelationship).where(GraphRelationship.document_id == document_id)
+            )
+        ).scalar_one()
+        # The relationship's source_entity_id must be the SAME row
+        # chunk 1 created under the underscore form, not a second one
+        # created for chunk 2's space-form re-mention.
+        assert relationship.source_entity_id == registration_fees.id
+
+
+@pytest.mark.asyncio
+async def test_rerun_idempotency_holds_across_differently_phrased_canonical_names(
+    client: AsyncClient, register_and_login
+) -> None:
+    """Re-indexing a document where the LLM happens to phrase the same
+    entity's canonical_name slightly differently on the second run
+    (underscore vs space) must still be recognized as the existing
+    entity -- normalization must not break idempotency."""
+    headers = _auth_headers(await register_and_login(email="graphnorm3@example.com"))
+    document_id = await _create_document(client, headers, "Fee Schedule Agreement 3")
+
+    chunks = [_chunk(document_id, "node-0001", "Registration_Fees are due within 30 days.")]
+
+    first_run_json = """{
+      "entities": [
+        {"name": "Registration Fees", "canonical_name": "registration_fees", "entity_type": "term"}
+      ],
+      "relationships": []
+    }"""
+    second_run_json = """{
+      "entities": [
+        {"name": "registration fees", "canonical_name": "registration   fees", "entity_type": "term"}
+      ],
+      "relationships": []
+    }"""
+
+    gateway1 = _FakeGateway([first_run_json])
+    async with AsyncSessionLocal() as session:
+        service = GraphExtractionService(
+            session, GraphExtractor(gateway1, min_request_interval_seconds=0)
+        )
+        first = await service.extract_for_document(document_id, chunks)
+
+    assert first.entities_created == 1
+
+    # Second run (re-index): same document, same chunk, but the LLM
+    # this time returns extra internal whitespace in canonical_name.
+    gateway2 = _FakeGateway([second_run_json])
+    async with AsyncSessionLocal() as session:
+        service = GraphExtractionService(
+            session, GraphExtractor(gateway2, min_request_interval_seconds=0)
+        )
+        second = await service.extract_for_document(document_id, chunks)
+
+    assert second.chunks_succeeded == 1
+    assert second.entities_created == 0  # recognized as the existing entity
+
+    async with AsyncSessionLocal() as session:
+        entities = (
+            await session.execute(
+                select(GraphEntity).where(GraphEntity.document_id == document_id)
+            )
+        ).scalars().all()
+        assert len(entities) == 1
+
+
+@pytest.mark.asyncio
+async def test_semantically_similar_but_different_names_are_not_merged(
+    client: AsyncClient, register_and_login
+) -> None:
+    """"federal awards" and "federally sponsored awards" are related in
+    meaning but are different strings once normalized -- normalization
+    is syntactic only and must NOT merge them into one entity."""
+    headers = _auth_headers(await register_and_login(email="graphnorm4@example.com"))
+    document_id = await _create_document(client, headers, "Grants Policy Document")
+
+    chunk_json = """{
+      "entities": [
+        {"name": "federal awards", "canonical_name": "federal awards", "entity_type": "term"},
+        {"name": "federally sponsored awards", "canonical_name": "federally sponsored awards", \
+"entity_type": "term"}
+      ],
+      "relationships": []
+    }"""
+
+    chunks = [
+        _chunk(
+            document_id,
+            "node-0001",
+            "This policy distinguishes federal awards from federally sponsored awards.",
+        )
+    ]
+    gateway = _FakeGateway([chunk_json])
+    extractor = GraphExtractor(gateway, min_request_interval_seconds=0)
+
+    async with AsyncSessionLocal() as session:
+        service = GraphExtractionService(session, extractor)
+        result = await service.extract_for_document(document_id, chunks)
+
+    assert result.entities_created == 2
+
+    async with AsyncSessionLocal() as session:
+        entities = (
+            await session.execute(
+                select(GraphEntity).where(GraphEntity.document_id == document_id)
+            )
+        ).scalars().all()
+        canonical_names = {e.canonical_name for e in entities}
+        assert canonical_names == {"federal awards", "federally sponsored awards"}
