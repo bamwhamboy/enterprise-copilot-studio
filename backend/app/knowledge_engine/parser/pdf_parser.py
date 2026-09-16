@@ -8,27 +8,24 @@ Callers (the ingestion pipeline) are responsible for running this in a
 worker thread so it doesn't block the event loop.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import fitz  # PyMuPDF
 
 from app.core.exceptions import DocumentProcessingError
 from app.core.logging import get_logger
+from app.knowledge_engine.parser.base import ParsedDocument
 
 logger = get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class ParsedPdf:
-    text: str
-    page_count: int
 
 
 class PdfParser:
     """Extracts plain text and page count from a PDF file on disk."""
 
-    def extract(self, path: str | Path) -> ParsedPdf:
+    extensions = frozenset({".pdf"})
+    mime_types = frozenset({"application/pdf"})
+
+    def extract(self, path: str | Path) -> ParsedDocument:
         pdf_path = Path(path)
 
         try:
@@ -52,6 +49,6 @@ class PdfParser:
                     document.page_count,
                 )
 
-            return ParsedPdf(text=text, page_count=document.page_count)
+            return ParsedDocument(text=text, page_count=document.page_count)
         finally:
             document.close()

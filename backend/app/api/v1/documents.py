@@ -1,8 +1,10 @@
 """Document endpoints.
 
 GET / POST / DELETE for the Sprint 2 JSON-based CRUD (unchanged), plus
-the new Sprint 3A ``POST /upload`` for real PDF ingestion. No PUT/update
-endpoint, per spec.
+the Sprint 3A ``POST /upload`` for real document ingestion. Supports
+PDF, DOCX, TXT, PPTX, CSV, and XLSX (see
+``app/knowledge_engine/parser/registry.py``). No PUT/update endpoint,
+per spec.
 """
 
 import uuid
@@ -62,7 +64,7 @@ async def create_document(
     "/upload",
     response_model=DocumentRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a PDF document",
+    summary="Upload a document (PDF, DOCX, TXT, PPTX, CSV, or XLSX)",
 )
 async def upload_document(
     user: CurrentUser,
@@ -73,7 +75,13 @@ async def upload_document(
     content = await file.read()
     document = await service.upload_document(
         knowledge_source_id=knowledge_source_id,
-        filename=file.filename or "upload.pdf",
+        # No extension here deliberately doesn't default to any one
+        # supported format (previously this defaulted to ".pdf",
+        # which would silently try to parse non-PDF bytes as a PDF
+        # instead of failing validation cleanly) -- an extensionless
+        # ".bin" filename always fails the registry's extension check
+        # with a clean 415, regardless of which formats are supported.
+        filename=file.filename or "upload.bin",
         content_type=file.content_type,
         content=content,
         organization_id=scoped_organization_id(user),
