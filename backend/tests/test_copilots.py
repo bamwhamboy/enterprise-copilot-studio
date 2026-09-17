@@ -49,14 +49,73 @@ async def test_create_copilot_missing_name_returns_422(
 
 
 @pytest.mark.asyncio
-async def test_create_copilot_invalid_domain_returns_422(
+async def test_create_copilot_existing_domains_still_work(
     client: AsyncClient, register_and_login
 ) -> None:
+    """The previously-fixed domains must still work now that domain is
+    free-form -- this isn't special-cased, it's just any valid string."""
     headers = _auth_headers(await register_and_login(email="copilot3@example.com"))
+    for domain in ("hr", "finance", "procurement", "sales", "legal", "it", "analytics"):
+        response = await client.post(
+            COPILOT_BASE, json={"name": f"{domain} copilot", "domain": domain}, headers=headers
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["domain"] == domain
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_custom_domain_is_accepted_and_normalized(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot3b@example.com"))
     response = await client.post(
-        COPILOT_BASE, json={"name": "X", "domain": "marketing"}, headers=headers
+        COPILOT_BASE,
+        json={"name": "Clinical Copilot", "domain": "  Clinical Research  "},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    assert response.json()["domain"] == "clinical research"
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_empty_domain_returns_422(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot3c@example.com"))
+    response = await client.post(
+        COPILOT_BASE, json={"name": "X", "domain": "   "}, headers=headers
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_domain_too_long_returns_422(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot3d@example.com"))
+    response = await client.post(
+        COPILOT_BASE, json={"name": "X", "domain": "a" * 101}, headers=headers
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_copilot_accepts_custom_domain(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot3e@example.com"))
+    create_response = await client.post(
+        COPILOT_BASE, json={"name": "Retitle Me"}, headers=headers
+    )
+    copilot_id = create_response.json()["id"]
+
+    response = await client.put(
+        f"{COPILOT_BASE}/{copilot_id}",
+        json={"domain": "  Regulatory Affairs  "},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["domain"] == "regulatory affairs"
 
 
 @pytest.mark.asyncio
