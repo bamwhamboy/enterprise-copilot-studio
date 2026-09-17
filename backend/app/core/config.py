@@ -69,7 +69,14 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 25
 
     # --- LLM defaults (Sprint 4/5) ------------------------------------------
-    DEFAULT_LLM_PROVIDER: Literal["groq", "openai", "azure_openai", "anthropic"] = "groq"
+    # "ollama" added (Sprint 1 model registry foundation): the provider
+    # layer (app/llm/providers.py) already implements a full Ollama
+    # client, but this Literal didn't include it -- an inconsistency
+    # between the two providers vocabularies, not an intentional
+    # restriction.
+    DEFAULT_LLM_PROVIDER: Literal["groq", "openai", "azure_openai", "anthropic", "ollama"] = (
+        "groq"
+    )
     DEFAULT_LLM_MODEL: str = "openai/gpt-oss-120b"
     DEFAULT_TEMPERATURE: float = 0.2
     DEFAULT_MAX_TOKENS: int = 1024

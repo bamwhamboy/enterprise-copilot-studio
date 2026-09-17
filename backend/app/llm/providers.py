@@ -25,6 +25,7 @@ import litellm
 
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.llm.model_registry import get_default_model_id
 from app.llm.models import (
     GenerationRequest,
     GenerationResponse,
@@ -199,13 +200,18 @@ def build_provider_configs(settings: Settings) -> dict[LLMProvider, ProviderConf
             provider=LLMProvider.OPENAI,
             api_key=settings.OPENAI_API_KEY,
             base_url=None,
-            default_model="gpt-4o",
+            default_model=get_default_model_id(LLMProvider.OPENAI) or "gpt-4o",
             configured=bool(settings.OPENAI_API_KEY),
         ),
         LLMProvider.GROQ: ProviderConfig(
             provider=LLMProvider.GROQ,
             api_key=settings.GROQ_API_KEY,
             base_url=settings.LLM_GATEWAY_BASE_URL,
+            # Deliberately NOT sourced from the registry -- this was
+            # already settings-driven (not a hardcoded literal), and
+            # pointing it at a static registry entry would make it
+            # static too, a real behavior change. See model_registry.py's
+            # module docstring.
             default_model=settings.DEFAULT_LLM_MODEL,
             configured=bool(settings.GROQ_API_KEY),
         ),
@@ -213,7 +219,7 @@ def build_provider_configs(settings: Settings) -> dict[LLMProvider, ProviderConf
             provider=LLMProvider.AZURE_OPENAI,
             api_key=settings.AZURE_OPENAI_API_KEY,
             base_url=settings.AZURE_OPENAI_ENDPOINT,
-            default_model="gpt-4o",
+            default_model=get_default_model_id(LLMProvider.AZURE_OPENAI) or "gpt-4o",
             configured=bool(
                 settings.AZURE_OPENAI_API_KEY and settings.AZURE_OPENAI_ENDPOINT
             ),
@@ -222,14 +228,15 @@ def build_provider_configs(settings: Settings) -> dict[LLMProvider, ProviderConf
             provider=LLMProvider.ANTHROPIC,
             api_key=settings.ANTHROPIC_API_KEY,
             base_url=None,
-            default_model="claude-3-5-sonnet-latest",
+            default_model=get_default_model_id(LLMProvider.ANTHROPIC)
+            or "claude-3-5-sonnet-latest",
             configured=bool(settings.ANTHROPIC_API_KEY),
         ),
         LLMProvider.OLLAMA: ProviderConfig(
             provider=LLMProvider.OLLAMA,
             api_key=None,
             base_url=settings.OLLAMA_BASE_URL,
-            default_model="llama3",
+            default_model=get_default_model_id(LLMProvider.OLLAMA) or "llama3",
             configured=bool(settings.OLLAMA_BASE_URL),
         ),
     }
