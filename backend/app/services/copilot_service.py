@@ -58,6 +58,7 @@ class CopilotService:
             domain=payload.domain,
             status=payload.status,
             model=payload.model,
+            capabilities=payload.capabilities.model_dump(),
             knowledge_sources=knowledge_sources,
             organization_id=organization_id,
         )

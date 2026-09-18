@@ -341,3 +341,142 @@ async def test_deleting_copilot_does_not_delete_knowledge_source(
 
     response = await client.get(f"{KS_BASE}/{ks_id}", headers=headers)
     assert response.status_code == 200
+
+
+# --- Capabilities / HITL foundation (Sprint 1) ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_defaults_to_human_in_the_loop_disabled(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot-cap1@example.com"))
+    response = await client.post(
+        COPILOT_BASE, json={"name": "Default Capabilities Copilot"}, headers=headers
+    )
+    assert response.status_code == 201
+    assert response.json()["capabilities"] == {"human_in_the_loop": False}
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_with_explicit_human_in_the_loop_true(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot-cap2@example.com"))
+    response = await client.post(
+        COPILOT_BASE,
+        json={"name": "HITL Copilot", "capabilities": {"human_in_the_loop": True}},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    assert response.json()["capabilities"] == {"human_in_the_loop": True}
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_capabilities_allows_future_extra_keys(
+    client: AsyncClient, register_and_login
+) -> None:
+    """A not-yet-named capability key (e.g. a future retrieval/graph/
+    agentic toggle) must not be rejected -- it's carried through
+    opaquely until it's promoted to a real field."""
+    headers = _auth_headers(await register_and_login(email="copilot-cap3@example.com"))
+    response = await client.post(
+        COPILOT_BASE,
+        json={
+            "name": "Forward Compatible Copilot",
+            "capabilities": {"human_in_the_loop": False, "future_toggle": True},
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201
+    assert response.json()["capabilities"] == {
+        "human_in_the_loop": False,
+        "future_toggle": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_rejects_non_bool_human_in_the_loop(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot-cap4@example.com"))
+    response = await client.post(
+        COPILOT_BASE,
+        json={"name": "X", "capabilities": {"human_in_the_loop": "not-a-bool"}},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_copilot_rejects_non_object_capabilities(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot-cap5@example.com"))
+    response = await client.post(
+        COPILOT_BASE,
+        json={"name": "X", "capabilities": "not-an-object"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_copilot_toggles_human_in_the_loop(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot-cap6@example.com"))
+    created = (
+        await client.post(COPILOT_BASE, json={"name": "Toggle Me"}, headers=headers)
+    ).json()
+    assert created["capabilities"] == {"human_in_the_loop": False}
+
+    response = await client.put(
+        f"{COPILOT_BASE}/{created['id']}",
+        json={"capabilities": {"human_in_the_loop": True}},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["capabilities"] == {"human_in_the_loop": True}
+
+
+@pytest.mark.asyncio
+async def test_update_without_capabilities_leaves_existing_value_unchanged(
+    client: AsyncClient, register_and_login
+) -> None:
+    """Omitting capabilities on update must not reset it -- standard
+    partial-update semantics (exclude_unset), same as every other
+    optional field on this schema."""
+    headers = _auth_headers(await register_and_login(email="copilot-cap7@example.com"))
+    created = (
+        await client.post(
+            COPILOT_BASE,
+            json={"name": "Untouched Capabilities", "capabilities": {"human_in_the_loop": True}},
+            headers=headers,
+        )
+    ).json()
+
+    response = await client.put(
+        f"{COPILOT_BASE}/{created['id']}", json={"name": "Renamed"}, headers=headers
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Renamed"
+    assert body["capabilities"] == {"human_in_the_loop": True}
+
+
+@pytest.mark.asyncio
+async def test_update_copilot_rejects_non_bool_human_in_the_loop(
+    client: AsyncClient, register_and_login
+) -> None:
+    headers = _auth_headers(await register_and_login(email="copilot-cap8@example.com"))
+    created = (
+        await client.post(COPILOT_BASE, json={"name": "X"}, headers=headers)
+    ).json()
+
+    response = await client.put(
+        f"{COPILOT_BASE}/{created['id']}",
+        json={"capabilities": {"human_in_the_loop": 12345}},
+        headers=headers,
+    )
+    assert response.status_code == 422

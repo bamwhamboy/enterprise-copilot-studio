@@ -8,11 +8,19 @@ than one copilot).
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String, Table, Column
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, ForeignKey, String, Table, Column, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
+
+# Sprint 1 HITL foundation: the safe, backward-compatible starting
+# capability set. Existing copilots (pre-migration) get exactly this
+# via the migration's server_default; new copilots get it via this
+# same dict, so both paths agree. Adding a future capability (e.g.
+# retrieval/graph/agentic toggles) means adding a key here -- no
+# schema/column change, since the column is JSONB.
+DEFAULT_CAPABILITIES: dict[str, object] = {"human_in_the_loop": False}
 
 # Association table for the Copilot <-> KnowledgeSource many-to-many relationship.
 copilot_knowledge_sources = Table(
@@ -58,6 +66,21 @@ class Copilot(Base):
     # default -- both should point at the same current, real model id.
     model: Mapped[str] = mapped_column(
         String(100), nullable=False, default="openai/gpt-oss-120b"
+    )
+    # Sprint 1 HITL foundation: JSONB so future capability keys
+    # (retrieval/graph/agentic toggles, etc.) never need another
+    # migration -- just a new key in DEFAULT_CAPABILITIES and the
+    # corresponding Pydantic field in app/schemas/copilot.py.
+    # NOT NULL with both a Python-side default (new ORM instances
+    # built in Python before insert) and a matching server_default
+    # (existing rows backfilled by the migration, and any insert that
+    # bypasses the ORM). Deliberately does not implement any HITL
+    # workflow/review-queue logic -- this is configuration only.
+    capabilities: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: dict(DEFAULT_CAPABILITIES),
+        server_default=text("'{\"human_in_the_loop\": false}'::jsonb"),
     )
 
     created_at: Mapped[datetime] = mapped_column(
