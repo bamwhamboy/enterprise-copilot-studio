@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     # Off by default: this is additive to indexing.
     GRAPH_EXTRACTION_ENABLED: bool = False
 
+    # --- Graph RAG retrieval-node integration -------------------------------
+    # Off by default: existing deployments/users must continue on the
+    # current vector-only retrieval path unless this is explicitly
+    # enabled. See app/agents/retrieval_node.py.
+    GRAPH_RAG_ENABLED: bool = False
+
 
     # --- Enterprise Hybrid Hierarchical RAG (Sprint 3B) -----------------------
     QDRANT_COLLECTION_NAME: str = "knowledge_chunks"
