@@ -101,6 +101,13 @@ class Settings(BaseSettings):
     # enabled. See app/agents/retrieval_node.py.
     GRAPH_RAG_ENABLED: bool = False
 
+    # Off by default: preserves the existing retrieval_node path
+    # exactly (Settings.GRAPH_RAG_ENABLED alone) unless explicitly
+    # turned on. Requires GRAPH_RAG_ENABLED=True to have any effect --
+    # see AdaptiveRetrievalOrchestrator, which forces HYBRID mode
+    # whenever GRAPH_RAG_ENABLED is False regardless of this flag.
+    ADAPTIVE_RETRIEVAL_ENABLED: bool = False
+
 
     # --- Enterprise Hybrid Hierarchical RAG (Sprint 3B) -----------------------
     QDRANT_COLLECTION_NAME: str = "knowledge_chunks"

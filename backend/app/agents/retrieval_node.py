@@ -45,6 +45,9 @@ from app.knowledge_engine.retrieval.reranker import Reranker
 # same reasoning). Actual imports happen inside _apply_graph_rag,
 # gated behind settings.GRAPH_RAG_ENABLED.
 if TYPE_CHECKING:
+    from app.knowledge_engine.retrieval.adaptive_retrieval_orchestrator import (
+        AdaptiveRetrievalOrchestrator,
+    )
     from app.knowledge_engine.retrieval.graph_vector_fusion import GraphVectorFusion
     from app.knowledge_engine.retrieval.multi_hop_retriever import MultiHopRetriever
 
@@ -75,6 +78,11 @@ def make_retrieval_node(
     # get_chat_workflow need no changes at all for this integration.
     graph_retriever: "MultiHopRetriever | None" = None,
     fusion: "GraphVectorFusion | None" = None,
+    # Injectable for tests only, same reasoning -- see
+    # _get_adaptive_retrieval, which lazily builds a real
+    # AdaptiveRetrievalOrchestrator when settings.ADAPTIVE_RETRIEVAL_ENABLED
+    # is True and no instance was given.
+    orchestrator: "AdaptiveRetrievalOrchestrator | None" = None,
 ):
     query_rewriter = QueryRewriter()
     reranker = Reranker()
@@ -85,15 +93,27 @@ def make_retrieval_node(
         if settings.RAG_QUERY_REWRITE_ENABLED:
             query = query_rewriter.rewrite(query)
 
-        node_results = retriever.retrieve(
-            query,
-            knowledge_source_id=state.get("knowledge_source_id"),
-            document_id=state.get("document_id"),
-        )
-        retrieved = build_retrieved_chunks(node_results)
+        if settings.ADAPTIVE_RETRIEVAL_ENABLED:
+            # Adaptive path: AdaptiveRetrievalOrchestrator owns the
+            # entire "get chunks for this query+scope" decision
+            # (including whether to call HybridRetriever at all).
+            # Mutually exclusive with the Stage A branch below --
+            # never both for the same request.
+            retrieved = await _get_adaptive_retrieval(query, state, settings, retriever, orchestrator)
+        else:
+            # Stage A path -- byte-identical to before adaptive
+            # orchestration existed.
+            node_results = retriever.retrieve(
+                query,
+                knowledge_source_id=state.get("knowledge_source_id"),
+                document_id=state.get("document_id"),
+            )
+            retrieved = build_retrieved_chunks(node_results)
 
-        if settings.GRAPH_RAG_ENABLED:
-            retrieved = await _apply_graph_rag(query, state, retrieved, graph_retriever, fusion)
+            if settings.GRAPH_RAG_ENABLED:
+                retrieved = await _apply_graph_rag(
+                    query, state, retrieved, graph_retriever, fusion
+                )
 
         if settings.RAG_RERANK_ENABLED:
             retrieved = reranker.rerank(query, retrieved)
@@ -107,6 +127,68 @@ def make_retrieval_node(
         return {"retrieved_chunks": compressed, "confidence": confidence}
 
     return retrieval_node
+
+
+async def _get_adaptive_retrieval(
+    query: str,
+    state: ChatState,
+    settings: Settings,
+    hybrid_retriever: HybridRetriever,
+    orchestrator: "AdaptiveRetrievalOrchestrator | None",
+) -> list[RetrievedChunk]:
+    """Delegates entirely to AdaptiveRetrievalOrchestrator. If none was
+    injected (production default), lazily builds one -- opening a
+    graph-backed session only when GRAPH_RAG_ENABLED is True and scope
+    is actually available; otherwise builds a graph-less orchestrator,
+    which resolves to HYBRID mode with no DB session at all.
+    """
+    document_id = _parse_uuid(state.get("document_id"))
+    knowledge_source_id = _parse_uuid(state.get("knowledge_source_id"))
+
+    if orchestrator is not None:
+        return await orchestrator.retrieve(
+            query, document_id=document_id, knowledge_source_id=knowledge_source_id
+        )
+
+    from app.knowledge_engine.retrieval.adaptive_retrieval_orchestrator import (
+        AdaptiveRetrievalOrchestrator,
+    )
+
+    graph_scope_available = document_id is not None or knowledge_source_id is not None
+    if settings.GRAPH_RAG_ENABLED and graph_scope_available:
+        from app.database.session import AsyncSessionLocal
+        from app.knowledge_engine.retrieval.graph_retriever import GraphRetriever
+        from app.knowledge_engine.retrieval.graph_vector_fusion import GraphVectorFusion
+        from app.knowledge_engine.retrieval.multi_hop_retriever import MultiHopRetriever
+        from app.repositories.graph_repository import (
+            GraphEntityRepository,
+            GraphEvidenceRepository,
+            GraphRelationshipRepository,
+        )
+
+        async with AsyncSessionLocal() as session:
+            live_orchestrator = AdaptiveRetrievalOrchestrator(
+                settings,
+                hybrid_retriever,
+                MultiHopRetriever(
+                    GraphRetriever(
+                        GraphEntityRepository(session),
+                        GraphRelationshipRepository(session),
+                        GraphEvidenceRepository(session),
+                    )
+                ),
+                GraphVectorFusion(),
+            )
+            return await live_orchestrator.retrieve(
+                query, document_id=document_id, knowledge_source_id=knowledge_source_id
+            )
+
+    # Graph RAG disabled or no usable scope: the orchestrator would
+    # force HYBRID mode anyway, so skip opening a DB session entirely.
+    live_orchestrator = AdaptiveRetrievalOrchestrator(settings, hybrid_retriever)
+    return await live_orchestrator.retrieve(
+        query, document_id=document_id, knowledge_source_id=knowledge_source_id
+    )
 
 
 async def _apply_graph_rag(
