@@ -10,7 +10,7 @@ from app.knowledge_engine.retrieval.adaptive_retrieval_orchestrator import (
     AdaptiveRetrievalOrchestrator,
     RetrievalMode,
     RoutingContext,
-    keyword_mode_selector,
+    jev_mode_selector,
 )
 from app.knowledge_engine.retrieval.graph_retriever import GraphRetrievalResult
 from app.knowledge_engine.retrieval.graph_vector_fusion import FusedResult
@@ -71,31 +71,43 @@ def _patch_build_chunks(monkeypatch, chunks):
     )
 
 
-# --- Mode selection: keyword_mode_selector ----------------------------------
+# --- Mode selection: JEV adapter ------------------------------------------
 
 
-def test_keyword_selector_relationship_query_selects_graph():
-    ctx = RoutingContext(query="What is the relationship between Acme and Globex?",
-                          document_id=uuid.uuid4(), knowledge_source_id=None)
-    assert keyword_mode_selector(ctx) == RetrievalMode.GRAPH
+def test_jev_selector_relationship_query_selects_graph():
+    ctx = RoutingContext(
+        query="What is the relationship between Acme and Globex?",
+        document_id=uuid.uuid4(),
+        knowledge_source_id=None,
+    )
+    assert jev_mode_selector(ctx) == RetrievalMode.GRAPH
 
 
-def test_keyword_selector_multi_hop_query_selects_hybrid_graph():
-    ctx = RoutingContext(query="How does A affect B, which in turn impacts C?",
-                          document_id=uuid.uuid4(), knowledge_source_id=None)
-    assert keyword_mode_selector(ctx) == RetrievalMode.HYBRID_GRAPH
+def test_jev_selector_multi_hop_query_selects_hybrid_graph():
+    ctx = RoutingContext(
+        query="How does A affect B, which in turn impacts C?",
+        document_id=uuid.uuid4(),
+        knowledge_source_id=None,
+    )
+    assert jev_mode_selector(ctx) == RetrievalMode.HYBRID_GRAPH
 
 
-def test_keyword_selector_plain_query_selects_hybrid():
-    ctx = RoutingContext(query="What is the registration fee?",
-                          document_id=uuid.uuid4(), knowledge_source_id=None)
-    assert keyword_mode_selector(ctx) == RetrievalMode.HYBRID
+def test_jev_selector_plain_query_selects_hybrid():
+    ctx = RoutingContext(
+        query="What is the registration fee?",
+        document_id=uuid.uuid4(),
+        knowledge_source_id=None,
+    )
+    assert jev_mode_selector(ctx) == RetrievalMode.HYBRID
 
 
-def test_keyword_selector_is_deterministic():
-    ctx = RoutingContext(query="relationship between Acme and Globex",
-                          document_id=uuid.uuid4(), knowledge_source_id=None)
-    assert keyword_mode_selector(ctx) == keyword_mode_selector(ctx) == RetrievalMode.GRAPH
+def test_jev_selector_is_deterministic():
+    ctx = RoutingContext(
+        query="relationship between Acme and Globex",
+        document_id=uuid.uuid4(),
+        knowledge_source_id=None,
+    )
+    assert jev_mode_selector(ctx) == jev_mode_selector(ctx) == RetrievalMode.GRAPH
 
 
 # --- Master flag + scope enforcement (never delegated to selector) ---------
