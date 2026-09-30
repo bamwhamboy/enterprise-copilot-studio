@@ -10,9 +10,9 @@ via vector_results=[]) rather than writing a second conversion path --
 see graph_vector_fusion.py's own module docstring.
 
 No LLM call for routing. The mode-selection rule is a small, injected,
-deterministic ModeSelector backed by the JEV intent classifier --
-the selector can be replaced independently without changing the
-orchestration logic.
+deterministic ModeSelector (see keyword_mode_selector below) --
+swapping in a JEV-based classifier later means providing a different
+ModeSelector, not touching this class.
 
 Two safety invariants are enforced by this class directly, never
 delegated to the ModeSelector (a future/misbehaving selector cannot
@@ -28,6 +28,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from app.core.config import Settings
@@ -35,8 +36,6 @@ from app.core.logging import get_logger
 from app.knowledge_engine.citations.citation_builder import build_retrieved_chunks
 from app.knowledge_engine.models import RetrievedChunk
 from app.knowledge_engine.retrieval.hybrid_retriever import HybridRetriever
-from app.knowledge_engine.retrieval.contracts import RetrievalMode
-from app.knowledge_engine.retrieval.jev import JEVResult, classify_query
 
 # Deferred to TYPE_CHECKING only -- same reasoning as retrieval_node.py:
 # importing these for real pulls in LLMGateway/litellm transitively.
@@ -45,6 +44,12 @@ if TYPE_CHECKING:
     from app.knowledge_engine.retrieval.multi_hop_retriever import MultiHopRetriever
 
 logger = get_logger(__name__)
+
+
+class RetrievalMode(str, Enum):
+    HYBRID = "hybrid"
+    GRAPH = "graph"
+    HYBRID_GRAPH = "hybrid_graph"
 
 
 @dataclass(frozen=True)
@@ -62,11 +67,51 @@ class RoutingContext:
 ModeSelector = Callable[[RoutingContext], RetrievalMode]
 
 
-def jev_mode_selector(context: RoutingContext) -> RetrievalMode:
-    """Adapt the JEV result to the orchestrator's retrieval-mode contract."""
+# Deliberately simple, explainable, non-exhaustive pattern sets -- this
+# is the "small deterministic ModeSelector for this increment" the
+# task asks for, not a claim of real NLU. Checked in order: multi-hop
+# patterns first (more specific signal), then relationship patterns,
+# else HYBRID.
+_MULTI_HOP_PATTERNS = (
+    "and then",
+    "which in turn",
+    "eventually",
+    "downstream",
+    "indirectly",
+    "chain of",
+    "path from",
+    "multi-step",
+    "multiple steps",
+    "ultimately",
+    "as a result of",
+    "through which",
+    "leads to",
+)
 
-    result: JEVResult = classify_query(context.query)
-    return result.retrieval_mode
+_RELATIONSHIP_PATTERNS = (
+    "relationship between",
+    "relationship with",
+    "related to",
+    "relation to",
+    "connected to",
+    "connection between",
+    "associated with",
+    "linked to",
+    "affiliated with",
+    "who is",
+    "what is the link",
+)
+
+
+def keyword_mode_selector(context: RoutingContext) -> RetrievalMode:
+    """Default ModeSelector for this increment. No LLM, no embeddings --
+    plain substring matching against the (lowercased) query text."""
+    text = context.query.lower()
+    if any(pattern in text for pattern in _MULTI_HOP_PATTERNS):
+        return RetrievalMode.HYBRID_GRAPH
+    if any(pattern in text for pattern in _RELATIONSHIP_PATTERNS):
+        return RetrievalMode.GRAPH
+    return RetrievalMode.HYBRID
 
 
 class AdaptiveRetrievalOrchestrator:
@@ -83,7 +128,7 @@ class AdaptiveRetrievalOrchestrator:
         hybrid_retriever: HybridRetriever,
         graph_retriever: "MultiHopRetriever | None" = None,
         fusion: "GraphVectorFusion | None" = None,
-        mode_selector: ModeSelector = jev_mode_selector,
+        mode_selector: ModeSelector = keyword_mode_selector,
     ) -> None:
         self._settings = settings
         self._hybrid_retriever = hybrid_retriever
