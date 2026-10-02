@@ -1,0 +1,14 @@
+.vercel
+.env*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# macOS
+.DS_Store
+
+# Local/debug artifacts
+*.patch
+*.zip
