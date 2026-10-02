@@ -19,6 +19,9 @@ from app.evaluation.response_evaluator import ResponseEvaluator
 from app.guardrails.guardrails_runtime import GuardrailsRuntime
 from app.llm.gateway import LLMGateway
 from app.llm.models import GenerationRequest, LLMMessage
+from app.llm.model_registry import resolve_model
+
+
 
 _HUMAN_REVIEW_MESSAGE = (
     "I couldn't provide a sufficiently verified answer from the available "
@@ -55,6 +58,7 @@ def make_response_generator_node(
     async def response_generator_node(state: ChatState) -> dict:
         base_messages = state["llm_messages"]
         model = state.get("copilot_model") or None
+        provider = resolve_model(model).provider if model else None
         context = _context_text(state)
         attempts = 0
         evaluation_status = "passed"
@@ -78,6 +82,7 @@ def make_response_generator_node(
 
             request = GenerationRequest(
                 messages=messages,
+                provider=provider,
                 model=model,
                 temperature=settings.DEFAULT_TEMPERATURE,
                 max_tokens=settings.DEFAULT_MAX_TOKENS,

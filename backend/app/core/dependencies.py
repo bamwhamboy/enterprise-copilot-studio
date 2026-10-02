@@ -77,8 +77,10 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 
 
-async def get_copilot_service(session: DbSessionDep) -> CopilotService:
-    return CopilotService(session)
+async def get_copilot_service(
+    session: DbSessionDep, settings: SettingsDep
+) -> CopilotService:
+    return CopilotService(session, settings)
 
 
 async def get_knowledge_source_service(session: DbSessionDep) -> KnowledgeSourceService:

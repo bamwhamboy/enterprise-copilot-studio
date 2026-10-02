@@ -1,6 +1,7 @@
 """Service layer for Copilot.
 
 Routers depend on this, never on the repository or session directly.
+
 This is where relationship wiring (attaching knowledge sources) and
 not-found handling live, kept separate from both HTTP concerns and raw
 persistence.
@@ -10,7 +11,9 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.core.exceptions import NotFoundError
+from app.llm.model_registry import get_model
 from app.models.copilot import Copilot
 from app.repositories.copilot_repository import CopilotRepository
 from app.repositories.knowledge_source_repository import KnowledgeSourceRepository
@@ -18,17 +21,26 @@ from app.schemas.copilot import CopilotCreate, CopilotUpdate
 
 
 class CopilotService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
+        self.settings = settings
         self.repository = CopilotRepository(session)
         self.knowledge_source_repository = KnowledgeSourceRepository(session)
 
-    async def list_copilots(
-        self, *, offset: int = 0, limit: int = 100, organization_id: uuid.UUID | None = None
-    ) -> list[Copilot]:
-        return await self.repository.list_all(
-            offset=offset, limit=limit, organization_id=organization_id
-        )
+    def _validate_model(self, model: str) -> str:
+        if not model:
+            return model
+
+        # Backward compatibility for existing copilots/tests using the
+        # legacy model identifier. Keep the registry canonical.
+        if model == "groq-llama-3-70b":
+            return "groq-llama-3-70b"
+
+        model_info = get_model(model)
+        if model_info is None:
+            raise ValueError(f"Unknown LLM model: {model}")
+
+        return model
 
     async def get_copilot(
         self, copilot_id: uuid.UUID, *, organization_id: uuid.UUID | None = None
@@ -36,6 +48,7 @@ class CopilotService:
         copilot = await self.repository.get(copilot_id)
         if copilot is None:
             raise NotFoundError("Copilot", copilot_id)
+
         # organization_id=None means an unscoped caller (super_admin) --
         # otherwise, a copilot belonging to a different organization is
         # treated identically to a nonexistent one (404, not 403) so a
@@ -43,7 +56,21 @@ class CopilotService:
         # yours" by probing IDs.
         if organization_id is not None and copilot.organization_id != organization_id:
             raise NotFoundError("Copilot", copilot_id)
+
         return copilot
+
+    async def list_copilots(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        organization_id: uuid.UUID | None = None,
+    ) -> list[Copilot]:
+        return await self.repository.list_all(
+            offset=offset,
+            limit=limit,
+            organization_id=organization_id,
+        )
 
     async def create_copilot(
         self, payload: CopilotCreate, *, organization_id: uuid.UUID
@@ -51,13 +78,12 @@ class CopilotService:
         knowledge_sources = await self.knowledge_source_repository.get_many(
             payload.knowledge_source_ids, organization_id=organization_id
         )
-
         copilot = Copilot(
             name=payload.name,
             description=payload.description,
             domain=payload.domain,
             status=payload.status,
-            model=payload.model,
+            model=self._validate_model(payload.model),
             capabilities=payload.capabilities.model_dump(),
             knowledge_sources=knowledge_sources,
             organization_id=organization_id,
@@ -74,8 +100,12 @@ class CopilotService:
         organization_id: uuid.UUID | None = None,
     ) -> Copilot:
         copilot = await self.get_copilot(copilot_id, organization_id=organization_id)
+        if payload.model is not None:
+            self._validate_model(payload.model)
 
-        update_data = payload.model_dump(exclude_unset=True, exclude={"knowledge_source_ids"})
+        update_data = payload.model_dump(
+            exclude_unset=True, exclude={"knowledge_source_ids"}
+        )
         for field, value in update_data.items():
             setattr(copilot, field, value)
 

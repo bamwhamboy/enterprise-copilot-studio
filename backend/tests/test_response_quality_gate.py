@@ -12,8 +12,9 @@ import pytest
 from app.agents import response_generator_node as module
 from app.core.config import Settings
 from app.evaluation.response_evaluator import ResponseEvaluation
-from app.llm.models import LLMMessage
 from types import SimpleNamespace
+from app.llm.models import LLMMessage, LLMProvider
+
 
 class _FakeGateway:
     def __init__(self, responses: list[str]):
@@ -91,6 +92,8 @@ async def test_grounded_first_answer_is_emitted(settings, fake_stream_writer):
     assert result["response_text"] == "The policy allows INR 10,000."
     assert result["evaluation_status"] == "passed"
     assert result["evaluation_attempts"] == 1
+    assert gateway.requests[0].provider == LLMProvider.GROQ
+    assert gateway.requests[0].model == "groq/openai/gpt-oss-20b"
     assert result["human_review_required"] is False
     assert len(gateway.requests) == 1
     assert "".join(event["delta"] for event in fake_stream_writer) == "The policy allows INR 10,000."
