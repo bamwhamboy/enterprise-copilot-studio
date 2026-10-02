@@ -120,14 +120,25 @@ async def test_upload_registers_document_retrievable_via_get(
 
 
 @pytest.mark.asyncio
-async def test_upload_rejects_non_pdf(client: AsyncClient, register_and_login) -> None:
+async def test_upload_rejects_unsupported_format(
+    client: AsyncClient, register_and_login
+) -> None:
+    """.txt is now a supported format (Sprint 1 multi-format
+    ingestion) -- this must reject a genuinely unsupported type
+    instead."""
     headers = _auth_headers(await register_and_login(email="upload3@example.com"))
-    ks_id = await _create_knowledge_source(client, headers, "Reject Non-PDF Source")
+    ks_id = await _create_knowledge_source(client, headers, "Reject Unsupported Source")
 
     response = await client.post(
         f"{DOC_BASE}/upload",
         data={"knowledge_source_id": ks_id},
-        files={"file": ("notes.txt", io.BytesIO(b"just some text"), "text/plain")},
+        files={
+            "file": (
+                "archive.zip",
+                io.BytesIO(b"PK\x03\x04 not a real zip either"),
+                "application/zip",
+            )
+        },
         headers=headers,
     )
 
