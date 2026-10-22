@@ -1,9 +1,5 @@
-"""Online response evaluation and hallucination guardrail.
 
-This module uses W&B Weave's LLM-powered HallucinationFreeScorer as an
-online judge. The scorer checks the generated answer against the retrieved
-RAG context before the answer is exposed to the caller.
-"""
+"""Online response evaluation and completeness guardrail."""
 
 from __future__ import annotations
 
@@ -26,12 +22,12 @@ class ResponseEvaluation:
 
 
 class ResponseEvaluator:
-    """Run an LLM judge against a generated RAG response."""
+    """Evaluate grounding and completeness independently."""
 
     def __init__(self, settings: Settings) -> None:
-        self._settings = settings
         self._enabled = settings.RESPONSE_EVALUATION_ENABLED
         self._scorer: HallucinationFreeScorer | None = None
+        self._completeness_scorer: HallucinationFreeScorer | None = None
 
         if not self._enabled:
             return
@@ -43,35 +39,52 @@ class ResponseEvaluator:
                     settings={"print_call_link": False},
                 )
             except Exception:
-                # Evaluation itself can still run through the scorer if
-                # Weave tracing cannot initialize. Do not make telemetry
-                # availability the only thing deciding whether an answer
-                # is checked.
                 logger.exception("Failed to initialize Weave tracing")
 
         try:
             self._scorer = HallucinationFreeScorer(
                 model_id=settings.RESPONSE_EVALUATOR_MODEL,
                 system_prompt=(
-                    "You are a strict enterprise RAG answer evaluator. "
-                    "An answer is acceptable only when every material factual "
-                    "claim is supported by the supplied context. Treat any "
-                    "invented policy rule, amount, date, threshold, exception, "
-                    "eligibility condition, or other unsupported detail as a "
-                    "hallucination. If the context does not answer the question, "
-                    "the correct behavior is to say that the information is not "
-                    "available rather than infer or invent it."
+                    "You are a strict enterprise RAG grounding evaluator. "
+                    "Flag factual claims in the answer that are not supported "
+                    "by the supplied context. Do not assess completeness; "
+                    "another evaluator handles that."
                 ),
                 user_prompt=(
-                    "Retrieved information:\n{input_data}\n\n"
+                    "Context:\n{input_data}\n\n"
+                    "Answer:\n{output}\n\n"
+                    "Determine whether the answer contains unsupported factual "
+                    "claims. Return the scorer's normal result."
+                ),
+            )
+
+            self._completeness_scorer = HallucinationFreeScorer(
+                model_id=settings.RESPONSE_EVALUATOR_MODEL,
+                system_prompt=(
+                    "You are a strict enterprise RAG answer-completeness evaluator. "
+                    "Ignore writing style and evaluate coverage only. Identify every "
+                    "material part of the user's question. Compare each requested "
+                    "part with the retrieved context and candidate answer. Flag an "
+                    "answer as incomplete if the context contains a requested fact "
+                    "that the answer omits. This includes names, dates, deadlines, "
+                    "dependencies, conditions, and each part of multi-part questions. "
+                    "Do not require facts that are genuinely absent from the context "
+                    "when the answer clearly states that they are unavailable. "
+                    "Do not infer facts or treat an unsupported guess as coverage."
+                ),
+                user_prompt=(
+                    "Question and retrieved context:\n{input_data}\n\n"
                     "Candidate answer:\n{output}\n\n"
-                    "Determine whether the candidate answer is fully grounded "
-                    "in the retrieved context. Be strict."
+                    "Is every material, answerable part of the question covered? "
+                    "Flag missing requested information as a failure, even when "
+                    "the included statements are factually correct. Explain which "
+                    "parts are missing or confirm that coverage is complete."
                 ),
             )
         except Exception:
-            logger.exception("Failed to initialize Weave response scorer")
+            logger.exception("Failed to initialize response evaluation scorers")
             self._scorer = None
+            self._completeness_scorer = None
 
     @weave.op()
     async def evaluate(
@@ -80,7 +93,7 @@ class ResponseEvaluator:
         context: str,
         answer: str,
     ) -> ResponseEvaluation:
-        """Evaluate one generated answer against the retrieved context."""
+        """Check grounding and coverage before accepting an answer."""
         if not self._enabled:
             return ResponseEvaluation(
                 passed=True,
@@ -88,29 +101,65 @@ class ResponseEvaluator:
                 reasoning="Response evaluation is disabled.",
             )
 
-        if self._scorer is None:
+        if self._scorer is None or self._completeness_scorer is None:
             raise RuntimeError("Response evaluator is not available")
 
         evaluation_context = (
-            f"Question:\n{query}\n\n"
-            f"Retrieved context:\n{context}"
+            f"Question:\n{query}\n\nRetrieved context:\n{context}"
         )
 
-        result = await self._scorer.score(
+        grounding_result = await self._scorer.score(
             context=evaluation_context,
             output=answer,
         )
-
-        has_hallucination = bool(result.get("has_hallucination", True))
-        reasoning = str(
-            result.get("reasonings")
-            or result.get("reasoning")
-            or result.get("explanation")
-            or "The evaluator flagged the response as unsupported."
+        print("GROUNDING SCORER RESULT:", repr(grounding_result))
+        completeness_result = await self._completeness_scorer.score(
+            context=evaluation_context,
+            output=answer,
+        )
+        print("COMPLETENESS_SCORER RESULT:", repr(completeness_result))
+        grounding_failed = bool(
+            grounding_result.get("has_hallucination", True)
         )
 
+        completeness_failed = bool(
+            completeness_result.get("has_hallucination", True)
+        )
+
+        completeness_details = completeness_result.get("reasonings", [])
+        if isinstance(completeness_details, list):
+            completeness_failed = completeness_failed or any(
+                isinstance(item, dict)
+                and str(item.get("hallucination_type", "")).strip().lower()
+                in {"missing information", "omission", "incomplete answer"}
+                for item in completeness_details
+            )
+
+        grounding_reason = str(
+            grounding_result.get("reasonings")
+            or grounding_result.get("reasoning")
+            or grounding_result.get("explanation")
+            or "Grounding evaluator returned no explanation."
+        )
+        completeness_reason = str(
+            completeness_result.get("reasonings")
+            or completeness_result.get("reasoning")
+            or completeness_result.get("explanation")
+            or "Completeness evaluator returned no explanation."
+        )
+
+        failures = []
+        if grounding_failed:
+            failures.append(f"Grounding failure: {grounding_reason}")
+        if completeness_failed:
+            failures.append(f"Completeness failure: {completeness_reason}")
+
         return ResponseEvaluation(
-            passed=not has_hallucination,
-            has_hallucination=has_hallucination,
-            reasoning=reasoning,
+            passed=not failures,
+            has_hallucination=grounding_failed or completeness_failed,
+            reasoning=(
+                " ".join(failures)
+                if failures
+                else grounding_reason
+            ),
         )

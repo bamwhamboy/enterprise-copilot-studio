@@ -71,13 +71,17 @@ def make_response_generator_node(
             messages = base_messages
             if attempts > 1:
                 correction_prompt = (
-                    "The previous draft answer failed a strict grounding review. "
-                    "Regenerate the answer using ONLY the retrieved context. "
-                    "Remove every unsupported claim. If the context does not "
-                    "contain enough information to answer the question, say so "
-                    "explicitly instead of inferring.\n\n"
-                    f"Evaluator feedback:\n{last_reasoning}"
-                )
+                "The previous draft answer failed a strict grounding and completeness review. "
+                "Regenerate the answer using ONLY the retrieved context. "
+                "Answer every material part of the user's question, including all requested "
+                "people, dates, dependencies, conditions, and other relevant details that "
+                "are present in the context. "
+                "Do not omit a requested fact that is available in the context. "
+                "Remove every unsupported claim. If the context does not contain enough "
+                "information to answer part of the question, clearly identify that gap "
+                "instead of inferring or inventing information.\n\n"
+                f"Evaluator feedback:\n{last_reasoning}"
+	    )
                 messages = [LLMMessage(role="system", content=correction_prompt), *base_messages]
 
             request = GenerationRequest(

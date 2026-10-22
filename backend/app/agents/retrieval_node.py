@@ -26,6 +26,7 @@ the vector-only result for that request.
 from __future__ import annotations
 
 import uuid
+from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from app.agents.state import ChatState
@@ -120,7 +121,26 @@ def make_retrieval_node(
 
         # Keep only the final number of chunks after reranking.
         retrieved = retrieved[: settings.HYBRID_FINAL_TOP_K]
-
+        logger.info(
+            "Retrieved chunk diagnostics: %s",
+            [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "chunk_number": chunk.citation.chunk_number,
+                    "text_length": len(chunk.text),
+                    "text_hash": sha256(chunk.text.encode()).hexdigest()[:12],
+                    "november_excerpt": (
+                        chunk.text[
+                            max(0, chunk.text.lower().find("november") - 100):
+                            chunk.text.lower().find("november") + 140
+                        ].replace("\\n", " ")
+                        if "november" in chunk.text.lower()
+                        else None
+                    ),
+                }
+                for chunk in retrieved
+            ],
+        )
         confidence = confidence_scorer.score(retrieved)
         compressed = compression.compress(retrieved)
 
@@ -251,11 +271,27 @@ async def _apply_graph_rag(
                     query, knowledge_source_id=knowledge_source_id, document_id=document_id
                 )
 
+        from app.knowledge_engine.retrieval.graph_retriever import GraphRetrievalResult
+
+        # MultiHopRetriever returns MultiHopResult; fusion consumes
+        # GraphRetrievalResult. Adapt the shared graph result fields.
+        if not isinstance(graph_result, GraphRetrievalResult):
+            graph_result = GraphRetrievalResult(
+                matched_entities=list(graph_result.seed_entities),
+                relationships=list(graph_result.relationships),
+                entities=list(graph_result.entities),
+            )
+
         fused = active_fusion.fuse(
             vector_results,
             graph_result,
             document_id=document_id,
             knowledge_source_id=knowledge_source_id,
+        )
+        logger.info(
+            "Graph RAG retrieval/fusion succeeded: graph_results=%s, fused_results=%s",
+            len(graph_result.relationships),
+            len(fused),
         )
     except Exception:
         # Graph RAG must never fail an otherwise-working vector
