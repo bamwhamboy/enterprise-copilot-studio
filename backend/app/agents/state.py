@@ -26,8 +26,21 @@ class ChatState(TypedDict, total=False):
     retrieved_chunks: list[RetrievedChunk]
     confidence: float
 
+    # --- adaptive retrieval loop ---
+    retrieval_rounds: int
+    max_retrieval_rounds: int
+    retrieval_retry_query: str | None
+    next_action: str
+
     # --- context builder node output ---
     llm_messages: list[LLMMessage]
+
+    # --- response generator / evaluator output ---
+    response_text: str
+    evaluation_status: str
+    evaluation_attempts: int
+    evaluation_reasoning: str
+    human_review_required: bool
 
     # --- response generator / evaluator output ---
     response_text: str

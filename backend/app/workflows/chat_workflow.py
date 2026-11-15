@@ -49,7 +49,18 @@ def build_chat_workflow(
     graph.add_edge("planner", "retrieval")
     graph.add_edge("retrieval", "context_builder")
     graph.add_edge("context_builder", "response_generator")
-    graph.add_edge("response_generator", "citation_builder")
+    graph.add_conditional_edges(
+    "response_generator",
+    lambda state: (
+        "retrieve"
+        if state.get("next_action") == "retrieve"
+        else "continue"
+    ),
+    {
+        "retrieve": "retrieval",
+        "continue": "citation_builder",
+    },
+)
     graph.add_edge("citation_builder", END)
 
     return graph.compile()

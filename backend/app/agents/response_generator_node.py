@@ -1,11 +1,4 @@
-"""Response generation with an online quality gate.
-
-The node generates a draft, evaluates it against the retrieved RAG context
-with the Weave LLM judge, and gives the generation model one opportunity to
-correct unsupported claims. A second failed evaluation quarantines the
-answer for human review. Only the final verified answer is emitted to the
-stream, so an unverified draft is never exposed to the client.
-"""
+"""Response generation with an online grounding and completeness quality gate."""
 
 from __future__ import annotations
 
@@ -20,7 +13,6 @@ from app.guardrails.guardrails_runtime import GuardrailsRuntime
 from app.llm.gateway import LLMGateway
 from app.llm.models import GenerationRequest, LLMMessage
 from app.llm.model_registry import resolve_model
-
 
 
 _HUMAN_REVIEW_MESSAGE = (
@@ -41,12 +33,8 @@ def _context_text(state: ChatState) -> str:
 
 
 def _sanitize_llm_output(text: str) -> str:
-    """Strip HTML artifacts the model occasionally produces inside
-    markdown tables (e.g. <br> as its own workaround for a multi-line
-    table cell), which most frontend markdown renderers correctly
-    refuse to execute as real line breaks -- so it shows up as literal
-    text instead."""
-    return re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    """Convert HTML break tags into ordinary newlines."""
+    return re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
 
 
 def make_response_generator_node(
@@ -60,29 +48,35 @@ def make_response_generator_node(
         model = state.get("copilot_model") or None
         provider = resolve_model(model).provider if model else None
         context = _context_text(state)
+
+        max_attempts = max(1, settings.RESPONSE_MAX_EVALUATION_ATTEMPTS)
         attempts = 0
         evaluation_status = "passed"
         last_reasoning = ""
         answer = ""
 
-        while attempts < max(1, settings.RESPONSE_MAX_EVALUATION_ATTEMPTS):
+        while attempts < max_attempts:
             attempts += 1
-
             messages = base_messages
+
             if attempts > 1:
                 correction_prompt = (
-                "The previous draft answer failed a strict grounding and completeness review. "
-                "Regenerate the answer using ONLY the retrieved context. "
-                "Answer every material part of the user's question, including all requested "
-                "people, dates, dependencies, conditions, and other relevant details that "
-                "are present in the context. "
-                "Do not omit a requested fact that is available in the context. "
-                "Remove every unsupported claim. If the context does not contain enough "
-                "information to answer part of the question, clearly identify that gap "
-                "instead of inferring or inventing information.\n\n"
-                f"Evaluator feedback:\n{last_reasoning}"
-	    )
-                messages = [LLMMessage(role="system", content=correction_prompt), *base_messages]
+                    "The previous draft answer failed a strict grounding and "
+                    "completeness review. Regenerate the answer using ONLY the "
+                    "retrieved context. Answer every material part of the user's "
+                    "question, including all requested people, dates, dependencies, "
+                    "conditions, and other relevant details present in the context. "
+                    "Do not omit a requested fact that is available in the context. "
+                    "Remove every unsupported claim. If the context does not contain "
+                    "enough information to answer part of the question, clearly "
+                    "identify that gap instead of inferring or inventing information."
+                    "\n\nEvaluator feedback:\n"
+                    f"{last_reasoning}"
+                )
+                messages = [
+                    LLMMessage(role="system", content=correction_prompt),
+                    *base_messages,
+                ]
 
             request = GenerationRequest(
                 messages=messages,
@@ -91,13 +85,15 @@ def make_response_generator_node(
                 temperature=settings.DEFAULT_TEMPERATURE,
                 max_tokens=settings.DEFAULT_MAX_TOKENS,
             )
-            answer_parts: list[str] = []
 
+            answer_parts: list[str] = []
             async for chunk in gateway.stream(request):
                 if chunk.delta:
                     answer_parts.append(chunk.delta)
 
-            answer = guardrails.enforce_output(_sanitize_llm_output("".join(answer_parts)))
+            answer = guardrails.enforce_output(
+                _sanitize_llm_output("".join(answer_parts))
+            )
 
             if not settings.RESPONSE_EVALUATION_ENABLED:
                 evaluation_status = "disabled"
@@ -110,31 +106,28 @@ def make_response_generator_node(
                     answer=answer,
                 )
             except Exception as exc:
-                # A missing evaluator is a safety failure, not a reason to
-                # silently serve an unchecked financial answer.
                 evaluation_status = "human_review_required"
                 last_reasoning = f"Evaluator unavailable: {exc}"
                 answer = _HUMAN_REVIEW_MESSAGE
                 break
 
             last_reasoning = evaluation.reasoning
+
             if evaluation.passed:
                 evaluation_status = "passed" if attempts == 1 else "corrected"
                 break
 
-            evaluation_status = "correcting"
-
-            if attempts >= settings.RESPONSE_MAX_EVALUATION_ATTEMPTS:
+            if attempts >= max_attempts:
                 evaluation_status = "human_review_required"
                 answer = _HUMAN_REVIEW_MESSAGE
+            else:
+                evaluation_status = "correcting"
 
+        # Drafts are deliberately buffered until evaluation and any correction
+        # attempt are complete. Only the final accepted or safe fallback text
+        # is sent to the client.
         writer = get_stream_writer()
-
         if answer:
-            # Emit only after the final quality gate.
-            # The answer has already passed evaluation, so it is safe to stream.
-            # It was also already sanitized (see above) before evaluation, so
-            # the text streamed here is the same clean text the evaluator judged.
             chunk_size = 20
             for i in range(0, len(answer), chunk_size):
                 writer({"delta": answer[i:i + chunk_size]})
@@ -144,7 +137,11 @@ def make_response_generator_node(
             "evaluation_status": evaluation_status,
             "evaluation_attempts": attempts,
             "evaluation_reasoning": last_reasoning,
-            "human_review_required": evaluation_status == "human_review_required",
+            "human_review_required": (
+                evaluation_status == "human_review_required"
+            ),
+            "next_action": None,
+            "retrieval_retry_query": None,
         }
 
     return response_generator_node

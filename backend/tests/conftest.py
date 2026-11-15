@@ -31,7 +31,7 @@ app.dependency_overrides[get_embed_model] = lambda: MockEmbedding(embed_dim=384)
 app.dependency_overrides[get_qdrant_client] = lambda: _test_qdrant_client
 
 
-@pytest_asyncio.fixture(scope="session", autouse=True)
+@pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
 async def setup_database():
     """Create all tables once for the test session, drop them afterward."""
     async with engine.begin() as conn:
