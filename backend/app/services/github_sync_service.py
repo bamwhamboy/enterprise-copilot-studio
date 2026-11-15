@@ -6,6 +6,9 @@ from pathlib import PurePosixPath
 from urllib.parse import quote
 
 import httpx
+from sqlalchemy import select
+
+from app.models.document import Document
 
 from app.connectors.github_client import GITHUB_API, GitHubAPIError
 from app.core.config import get_settings
@@ -195,6 +198,16 @@ class GitHubSyncService:
                             if extension in DOCUMENT_EXTENSIONS or extension == ".txt"
                             else PurePosixPath(path).name + ".txt"
                         )
+
+                        existing = await self.session.scalar(
+                            select(Document.id).where(
+                                Document.knowledge_source_id == knowledge_source_id,
+                                Document.original_filename == path,
+                            )
+                        )
+                        if existing:
+                            result["files_skipped"] += 1
+                            continue
 
                         document = await self.documents.upload_document(
                             knowledge_source_id=knowledge_source_id,
