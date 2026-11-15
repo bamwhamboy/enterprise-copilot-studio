@@ -133,7 +133,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 14
-
+    GITHUB_TOKEN_ENCRYPTION_KEY: str | None = None
 
 @lru_cache
 def get_settings() -> Settings:

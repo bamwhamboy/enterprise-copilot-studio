@@ -2,7 +2,20 @@
 
 import uuid
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database.session import get_db
+from app.core.dependencies import DocumentServiceDep, IndexingServiceDep
+from app.services.github_sync_service import GitHubSyncService, GitHubSyncError
+from app.services.github_connection_service import (
+    GitHubConnectionService,
+    GitHubConnectionAlreadyExistsError,
+)
+from app.connectors.github_client import GitHubAPIError
+from app.schemas.github_connection import (
+    GitHubConnectionCreate,
+    GitHubConnectionRead,
+)
 
 from app.core.dependencies import KnowledgeSourceServiceDep
 from app.schemas.knowledge_source import (
@@ -85,3 +98,108 @@ async def delete_knowledge_source(
     await service.delete_knowledge_source(
         knowledge_source_id, organization_id=scoped_organization_id(user)
     )
+
+
+
+@router.post(
+    "/{knowledge_source_id}/github",
+    response_model=GitHubConnectionRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Connect a GitHub repository",
+)
+async def connect_github_repository(
+    knowledge_source_id: uuid.UUID,
+    payload: GitHubConnectionCreate,
+    user: CurrentUser,
+    session: AsyncSession = Depends(get_db),
+) -> GitHubConnectionRead:
+    service = GitHubConnectionService(session)
+    try:
+        connection = await service.connect(
+            knowledge_source_id,
+            organization_id=scoped_organization_id(user),
+            repository_owner=payload.repository_owner,
+            repository_name=payload.repository_name,
+            token=payload.token,
+        )
+    except GitHubConnectionAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GitHubAPIError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub credential encryption is not configured.",
+        ) from exc
+
+    return GitHubConnectionRead.model_validate(connection)
+
+
+@router.get(
+    "/{knowledge_source_id}/github",
+    response_model=GitHubConnectionRead,
+    summary="Get GitHub connection status",
+)
+async def get_github_connection(
+    knowledge_source_id: uuid.UUID,
+    user: CurrentUser,
+    session: AsyncSession = Depends(get_db),
+) -> GitHubConnectionRead:
+    service = GitHubConnectionService(session)
+    connection = await service.get_connection(
+        knowledge_source_id,
+        organization_id=scoped_organization_id(user),
+    )
+    if connection is None:
+        raise HTTPException(status_code=404, detail="GitHub connection not found.")
+    return GitHubConnectionRead.model_validate(connection)
+
+
+@router.delete(
+    "/{knowledge_source_id}/github",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Disconnect GitHub repository",
+)
+async def disconnect_github_repository(
+    knowledge_source_id: uuid.UUID,
+    user: CurrentUser,
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    service = GitHubConnectionService(session)
+    await service.disconnect(
+        knowledge_source_id,
+        organization_id=scoped_organization_id(user),
+    )
+
+
+
+@router.post(
+    "/{knowledge_source_id}/github/sync",
+    summary="Synchronize GitHub repository into the knowledge base",
+)
+async def sync_github_repository(
+    knowledge_source_id: uuid.UUID,
+    user: CurrentUser,
+    document_service: DocumentServiceDep,
+    indexing_service: IndexingServiceDep,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    service = GitHubSyncService(
+        session=session,
+        document_service=document_service,
+        indexing_service=indexing_service,
+    )
+    try:
+        return await service.sync(
+            knowledge_source_id,
+            organization_id=scoped_organization_id(user),
+        )
+    except GitHubSyncError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except GitHubAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub credentials could not be decrypted.",
+        ) from exc

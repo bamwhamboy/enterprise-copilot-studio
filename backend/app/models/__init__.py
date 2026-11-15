@@ -9,6 +9,7 @@ from app.models.copilot import Copilot, copilot_knowledge_sources
 from app.models.conversation import ConversationMessage, ConversationSession
 from app.models.document import Document
 from app.models.graph import GraphEntity, GraphEvidence, GraphRelationship
+from app.models.github_connection import GitHubConnection
 from app.models.knowledge_source import KnowledgeSource
 from app.models.organization import Organization
 from app.models.refresh_token import RefreshToken
@@ -29,4 +30,5 @@ __all__ = [
     "GraphEntity",
     "GraphRelationship",
     "GraphEvidence",
+    "GitHubConnection",
 ]
