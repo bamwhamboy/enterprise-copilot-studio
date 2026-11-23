@@ -49,10 +49,14 @@ async def validate_repository_access(
     except httpx.HTTPError as exc:
         raise GitHubAPIError("Could not reach GitHub to validate repository access.") from exc
 
-    if response.status_code in (401, 403, 404):
-        # GitHub can return 404 for private repositories the token cannot access.
+    if response.status_code == 401:
+        raise GitHubAPIError("GitHub token is invalid or expired.")
+    if response.status_code == 403:
+        message = response.json().get("message", "Permission denied.")
+        raise GitHubAPIError(f"GitHub permission error: {message}")
+    if response.status_code == 404:
         raise GitHubAPIError(
-            "GitHub rejected the token or the repository is unavailable to this token."
+            "Repository not found or token does not have access to it."
         )
 
     if response.status_code != 200:

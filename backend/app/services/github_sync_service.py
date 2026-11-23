@@ -79,7 +79,7 @@ class GitHubSyncService:
 
         if response.status_code != 200:
             raise GitHubAPIError(
-                "Could not retrieve the GitHub repository file tree."
+                f"GitHub tree request failed: HTTP {response.status_code}: {response.text[:300]}"
             )
 
         data = response.json()
@@ -104,7 +104,7 @@ class GitHubSyncService:
         )
 
         if response.status_code != 200:
-            raise GitHubAPIError("Could not retrieve a repository file.")
+            raise GitHubAPIError(f"GitHub file request failed: HTTP {response.status_code}: {response.text[:300]}")
 
         data = response.json()
 
@@ -161,7 +161,7 @@ class GitHubSyncService:
                 repo_response = await client.get(f"/repos/{owner}/{repository}")
                 if repo_response.status_code != 200:
                     raise GitHubAPIError(
-                        "Could not retrieve GitHub repository metadata."
+                        f"GitHub metadata request failed: HTTP {repo_response.status_code}: {repo_response.text[:300]}"
                     )
 
                 default_branch = repo_response.json().get("default_branch")
